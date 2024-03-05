@@ -263,7 +263,6 @@ ChatCommand* ChatHandler::getCommandTable()
         { "moveflag",       SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugMoveflags,                  "", nullptr },
         { "visibility",     SEC_MODERATOR,      false, nullptr,                                             "", debugVisibilityCommandTable },
         { "perf",           SEC_ADMINISTRATOR,  false, nullptr,                                             "", debugPerformanceCommandTable },
-        { "lootdropstats",  SEC_ADMINISTRATOR,  false, &ChatHandler::HandleDebugLootDropStats,              "", nullptr },
         { "utf8overflow",   SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleDebugOverflowCommand,            "", nullptr },
         { "chatfreeze",     SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleDebugChatFreezeCommand,          "", nullptr },
         { "opcodeouthistory",SEC_ADMINISTRATOR, true,  &ChatHandler::HandleDebugOutPacketHistory,           "", nullptr },
@@ -313,6 +312,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "zonexy",         SEC_MODERATOR,      false, &ChatHandler::HandleGoZoneXYCommand,            "", nullptr },
         { "xy",             SEC_MODERATOR,      false, &ChatHandler::HandleGoXYCommand,                "", nullptr },
         { "xyz",            SEC_MODERATOR,      false, &ChatHandler::HandleGoXYZCommand,               "", nullptr },
+        { "next",           SEC_ADMINISTRATOR,  false, &ChatHandler::HandleGoNextCommand,              "", nullptr },
         { "",               SEC_MODERATOR,      false, &ChatHandler::HandleGoCommand,                  "", nullptr },
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
@@ -429,6 +429,14 @@ ChatCommand* ChatHandler::getCommandTable()
         { "taxinode",       SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleLookupTaxiNodeCommand,      "", nullptr },
         { "tele",           SEC_MODERATOR,      true,  &ChatHandler::HandleLookupTeleCommand,          "", nullptr },
         { "title",          SEC_GAMEMASTER,     true,  &ChatHandler::HandleLookupTitleCommand,         "", nullptr },
+        { nullptr,          0,                  false, nullptr,                                        "", nullptr }
+    };
+
+    static ChatCommand lootCommandTable[] =
+    {
+        { "stats",          SEC_GAMEMASTER,     true,  &ChatHandler::HandleLootStatsCommand,           "", nullptr },
+        { "fullstats",      SEC_GAMEMASTER,     true,  &ChatHandler::HandleLootFullStatsCommand,       "", nullptr },
+
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
 
@@ -675,7 +683,6 @@ ChatCommand* ChatHandler::getCommandTable()
         { "spam_records",                SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadExpectedSpamRecords,            "", nullptr },
         { "spell_affect",                SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadSpellAffectCommand,             "", nullptr },
         { "spell_area",                  SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadSpellAreaCommand,               "", nullptr },
-        { "spell_bonus_data",            SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadSpellBonusesCommand,            "", nullptr },
         { "spell_chain",                 SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadSpellChainCommand,              "", nullptr },
         { "spell_elixir",                SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadSpellElixirCommand,             "", nullptr },
         { "spell_learn_spell",           SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadSpellLearnSpellCommand,         "", nullptr },
@@ -886,6 +893,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "sunsreach",      SEC_ADMINISTRATOR,  false, nullptr,                                        "", sunsReachReclamationTable },
         { "variables",      SEC_ADMINISTRATOR,  false, &ChatHandler::HandleVariablePrint,              "", nullptr },
         { "expansion",      SEC_ADMINISTRATOR,  false, &ChatHandler::HandleExpansionRelease,           "", nullptr },
+        { "set",            SEC_ADMINISTRATOR,  false, &ChatHandler::HandleSetVariable,                "", nullptr },
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }
     };
 
@@ -1030,6 +1038,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "quit",           SEC_CONSOLE,        true,  &ChatHandler::HandleQuitCommand,                "", nullptr },
         { "mmap",           SEC_GAMEMASTER,     false, nullptr,                                        "", mmapCommandTable },
         { "worldstate",     SEC_ADMINISTRATOR,  false, nullptr,                                        "", worldStateTable },
+        { "loot",           SEC_GAMEMASTER,     true,  nullptr,                                        "", lootCommandTable },
 #ifdef BUILD_PLAYERBOT
         { "bot",            SEC_PLAYER,         false, &ChatHandler::HandlePlayerbotCommand,           "", nullptr },
 #endif

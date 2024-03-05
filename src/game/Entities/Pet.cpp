@@ -1019,6 +1019,8 @@ int32 Pet::GetDispTP() const
 
 void Pet::Unsummon(PetSaveMode mode, Unit* owner /*= nullptr*/)
 {
+    MANGOS_ASSERT(!m_removed);
+
     if (!owner)
         owner = GetOwner();
 
@@ -1128,7 +1130,7 @@ void Pet::GivePetXP(uint32 xp)
     if (level < maxlevel)
     {
 
-        xp *= sWorld.getConfig(CONFIG_FLOAT_RATE_PET_XP_KILL);
+        xp *= GetMap()->GetXPModRate(RateModType::PETKILL);
 
         uint32 nextLvlXP = GetUInt32Value(UNIT_FIELD_PETNEXTLEVELEXP);
         uint32 curXP = GetUInt32Value(UNIT_FIELD_PETEXPERIENCE);

@@ -193,15 +193,15 @@ void Map::Initialize(bool loadInstanceData /*= true*/)
     m_persistentState->SetUsedByMapState(this);
     m_persistentState->InitPools();
 
-    sObjectMgr.LoadActiveEntities(this);
-
     m_graveyardManager.Init(this);
-
-    LoadTransports();
 
     m_variableManager.Initialize(m_persistentState->GetCompletedEncountersMask());
 
     m_spawnManager.Initialize();
+
+    sObjectMgr.LoadActiveEntities(this);
+
+    LoadTransports();
 }
 
 void Map::InitVisibilityDistance()
@@ -1136,6 +1136,80 @@ void Map::UnloadAll(bool pForce)
         ++i;
         UnloadGrid(grid.getX(), grid.getY(), pForce);       // deletes the grid and removes it from the GridRefManager
     }
+}
+
+// This is not retail like
+// Get xp rate for given type
+float Map::GetXPModRate(RateModType type) const
+{
+    float expMod = 1.0f;
+    switch (type)
+    {
+        case RateModType::QUEST:
+        {
+            switch (GetExpansion())
+            {
+                case 0:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_XP_QUEST_VANILLA);
+                    break;
+                default:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_XP_QUEST_BC);
+                    break;
+            }
+            expMod *= sWorld.getConfig(CONFIG_FLOAT_RATE_XP_QUEST);
+            break;
+
+        }
+        
+        case RateModType::KILL:
+        {
+            switch (GetExpansion())
+            {
+                case 0:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_XP_KILL_VANILLA);
+                    break;
+                default:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_XP_KILL_BC);
+                    break;
+            }
+            expMod *= sWorld.getConfig(CONFIG_FLOAT_RATE_XP_KILL);
+            break;
+        }
+
+        case RateModType::EXPLORE:
+        {
+            switch (GetExpansion())
+            {
+                case 0:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_XP_EXPLORE_VANILLA);
+                    break;
+                default:
+                case 1:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_XP_EXPLORE_BC);
+                    break;
+            }
+            expMod *= sWorld.getConfig(CONFIG_FLOAT_RATE_XP_EXPLORE);
+            break;
+        }
+
+        case RateModType::PETKILL:
+        {
+            switch (GetExpansion())
+            {
+                case 0:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_PET_XP_KILL_VANILLA);
+                    break;
+                default:
+                    expMod = sWorld.getConfig(CONFIG_FLOAT_RATE_PET_XP_KILL_BC);
+                    break;
+            }
+            expMod *= sWorld.getConfig(CONFIG_FLOAT_RATE_PET_XP_KILL);
+            break;
+        }
+        case RateModType::MAX: break;
+    }
+
+    return expMod;
 }
 
 uint32 Map::GetMaxPlayers() const

@@ -1251,7 +1251,7 @@ class Player : public Unit
 
         Player* GetTrader() const { return m_trade ? m_trade->GetTrader() : nullptr; }
         TradeData* GetTradeData() const { return m_trade; }
-        void TradeCancel(bool sendback);
+        void TradeCancel(bool sendback, TradeStatus status = TRADE_STATUS_TRADE_CANCELED);
 
         void UpdateEnchantTime(uint32 time);
         void UpdateItemDuration(uint32 time, bool realtimeonly = false);
@@ -1716,8 +1716,7 @@ class Player : public Unit
         void UpdateAllCritPercentages();
         void UpdateParryPercentage();
         void UpdateDodgePercentage();
-        void UpdateMeleeHitChances();
-        void UpdateRangedHitChances();
+        void UpdateWeaponHitChances(WeaponAttackType attType);
         void UpdateSpellHitChances();
 
         void UpdateAllSpellCritChances();
@@ -1725,6 +1724,8 @@ class Player : public Unit
         void UpdateExpertise(WeaponAttackType attType);
         void UpdateManaRegen();
         void UpdateEnergyRegen();
+
+        void UpdateWeaponDependantStats(WeaponAttackType attType);
 
         ObjectGuid const& GetLootGuid() const { return m_lootGuid; }
         void SetLootGuid(ObjectGuid const& guid) { m_lootGuid = guid; }
@@ -2274,7 +2275,7 @@ class Player : public Unit
         virtual void AddCooldown(SpellEntry const& spellEntry, ItemPrototype const* itemProto = nullptr, bool permanent = false, uint32 forcedDuration = 0, bool ignoreCat = false) override;
         virtual void RemoveSpellCooldown(SpellEntry const& spellEntry, bool updateClient = true) override;
         virtual void RemoveSpellCategoryCooldown(uint32 category, bool updateClient = true) override;
-        virtual void RemoveAllCooldowns(bool sendOnly = false);
+        virtual void RemoveAllCooldowns(bool sendOnly = false) override;
         virtual void LockOutSpells(SpellSchoolMask schoolMask, uint32 duration) override;
         void RemoveSpellLockout(SpellSchoolMask spellSchoolMask, std::set<uint32>* spellAlreadySent = nullptr);
         void SendClearCooldown(uint32 spell_id, Unit* target) const;
@@ -2318,6 +2319,9 @@ class Player : public Unit
         void SetSpellModSpell(Spell* spell);
 
         uint32 LookupHighestLearnedRank(uint32 spellId);
+
+        std::pair<uint32, bool> GetLastData() { return std::make_pair(m_lastDbGuid, m_lastGameObject); }
+        void SetLastData(uint32 dbGuid, bool gameobject) { m_lastDbGuid = dbGuid; m_lastGameObject = gameobject; }
     protected:
         /*********************************************************/
         /***               BATTLEGROUND SYSTEM                 ***/
@@ -2644,6 +2648,8 @@ class Player : public Unit
         uint8 m_fishingSteps;
 
         std::map<uint32, ItemSetEffect> m_itemSetEffects;
+
+        uint32 m_lastDbGuid; bool m_lastGameObject;
 };
 
 void AddItemsSetItem(Player* player, Item* item);

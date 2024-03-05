@@ -653,6 +653,9 @@ Player::Player(WorldSession* session): Unit(), m_taxiTracker(*this), m_mover(thi
     m_isDebuggingAreaTriggers = false;
 
     m_fishingSteps = 0;
+
+    m_lastDbGuid = 0;
+    m_lastGameObject = false;
 }
 
 Player::~Player()
@@ -1868,6 +1871,8 @@ void Player::ToggleAFK()
     // afk player not allowed in battleground
     if (isAFK() && InBattleGround() && !InArena() && !IsGameMaster())
         LeaveBattleground();
+
+    GetSession()->AfkStateChange(isAFK());
 }
 
 void Player::ToggleDND()
@@ -5218,10 +5223,11 @@ void Player::UpdateRating(CombatRating cr)
             UpdateBlockPercentage();
             break;
         case CR_HIT_MELEE:
-            UpdateMeleeHitChances();
+            UpdateWeaponHitChances(BASE_ATTACK);
+            UpdateWeaponHitChances(OFF_ATTACK);
             break;
         case CR_HIT_RANGED:
-            UpdateRangedHitChances();
+            UpdateWeaponHitChances(RANGED_ATTACK);
             break;
         case CR_HIT_SPELL:
             UpdateSpellHitChances();
@@ -5529,7 +5535,7 @@ void Player::UpdateCombatSkills(Unit* /*pVictim*/, WeaponAttackType attType, boo
         return;
 
     // The farther player is from the cap, the easier it gets to level up the skill
-    float chance = ((float(std::max(1, (room / 5))) / (cap / 5)) * 100);
+    float chance = ((float(std::max(1, (room / 5))) / (cap / 5.f)) * 100);
 
     // Weapon skills: increase chance by intellect
     if (!defence)
@@ -6255,7 +6261,7 @@ bool Player::SetPosition(float x, float y, float z, float orientation, bool tele
             SetGroupUpdateFlag(GROUP_UPDATE_FLAG_POSITION);
 
         if (GetTrader() && !IsWithinDistInMap(GetTrader(), INTERACTION_DISTANCE))
-            GetSession()->SendCancelTrade();   // will close both side trade windows
+            TradeCancel(true, TRADE_STATUS_TARGET_TO_FAR);
 
         if (m_needsZoneUpdate)
         {
@@ -6438,7 +6444,7 @@ void Player::CheckAreaExploreAndOutdoor()
                 uint32 XP;
                 if (diff < -5)
                 {
-                    XP = uint32(sObjectMgr.GetBaseXP(GetLevel() + 5) * sWorld.getConfig(CONFIG_FLOAT_RATE_XP_EXPLORE));
+                    XP = uint32(sObjectMgr.GetBaseXP(GetLevel() + 5) * GetMap()->GetXPModRate(RateModType::EXPLORE));
                 }
                 else if (diff > 5)
                 {
@@ -6448,11 +6454,11 @@ void Player::CheckAreaExploreAndOutdoor()
                     else if (exploration_percent < 0)
                         exploration_percent = 0;
 
-                    XP = uint32(sObjectMgr.GetBaseXP(p->area_level) * exploration_percent / 100 * sWorld.getConfig(CONFIG_FLOAT_RATE_XP_EXPLORE));
+                    XP = uint32(sObjectMgr.GetBaseXP(p->area_level) * exploration_percent / 100 * GetMap()->GetXPModRate(RateModType::EXPLORE));
                 }
                 else
                 {
-                    XP = uint32(sObjectMgr.GetBaseXP(p->area_level) * sWorld.getConfig(CONFIG_FLOAT_RATE_XP_EXPLORE));
+                    XP = uint32(sObjectMgr.GetBaseXP(p->area_level) * GetMap()->GetXPModRate(RateModType::EXPLORE));
                 }
 
                 GiveXP(XP, nullptr);
@@ -10484,14 +10490,11 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
         ApplyEquipCooldown(pItem);
 
         if (slot == EQUIPMENT_SLOT_MAINHAND)
-        {
-            UpdateExpertise(BASE_ATTACK);
-            UpdateMeleeHitChances();
-        }
+            UpdateWeaponDependantStats(BASE_ATTACK);
         else if (slot == EQUIPMENT_SLOT_OFFHAND)
-            UpdateExpertise(OFF_ATTACK);
+            UpdateWeaponDependantStats(OFF_ATTACK);
         else if (slot == EQUIPMENT_SLOT_RANGED)
-            UpdateRangedHitChances();
+            UpdateWeaponDependantStats(RANGED_ATTACK);
     }
     else
     {
@@ -10646,10 +10649,10 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
                             pItem->ClearEnchantment(PROP_ENCHANTMENT_SLOT_1);
                         }
 
-                        UpdateExpertise(BASE_ATTACK);
+                        UpdateWeaponDependantStats(BASE_ATTACK);
                     }
                     else if (slot == EQUIPMENT_SLOT_OFFHAND)
-                        UpdateExpertise(OFF_ATTACK);
+                        UpdateWeaponDependantStats(OFF_ATTACK);
                 }
             }
 
@@ -10772,11 +10775,13 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
                 // remove item dependent auras and casts (only weapon and armor slots)
                 RemoveItemDependentAurasAndCasts(pItem);
 
-                // update expertise
+                // update weapon dependant stats
                 if (slot == EQUIPMENT_SLOT_MAINHAND)
-                    UpdateExpertise(BASE_ATTACK);
+                    UpdateWeaponDependantStats(BASE_ATTACK);
                 else if (slot == EQUIPMENT_SLOT_OFFHAND)
-                    UpdateExpertise(OFF_ATTACK);
+                    UpdateWeaponDependantStats(OFF_ATTACK);
+                else if (slot == EQUIPMENT_SLOT_RANGED)
+                    UpdateWeaponDependantStats(RANGED_ATTACK);
 
                 // equipment visual show
                 SetVisibleItemSlot(slot, nullptr);
@@ -11599,7 +11604,7 @@ void Player::SendSellError(SellResult msg, Creature* pCreature, ObjectGuid itemG
     GetSession()->SendPacket(data);
 }
 
-void Player::TradeCancel(bool sendback)
+void Player::TradeCancel(bool sendback, TradeStatus status /*= TRADE_STATUS_TRADE_CANCELED*/)
 {
     if (m_trade)
     {
@@ -11607,9 +11612,9 @@ void Player::TradeCancel(bool sendback)
 
         // send yellow "Trade canceled" message to both traders
         if (sendback)
-            GetSession()->SendCancelTrade();
+            GetSession()->SendCancelTrade(status);
 
-        trader->GetSession()->SendCancelTrade();
+        trader->GetSession()->SendCancelTrade(status);
 
         // cleanup
         delete m_trade;
@@ -13313,7 +13318,7 @@ void Player::RewardQuest(Quest const* pQuest, uint32 reward, Object* questGiver,
     QuestStatusData& q_status = mQuestStatus[quest_id];
 
     // Used for client inform but rewarded only in case not max level
-    uint32 xp = uint32(pQuest->XPValue(this) * sWorld.getConfig(CONFIG_FLOAT_RATE_XP_QUEST));
+    uint32 xp = uint32(pQuest->XPValue(this) * GetMap()->GetXPModRate(RateModType::QUEST));
 
     if (GetLevel() < GetMaxAttainableLevel())
         GiveXP(xp, nullptr);

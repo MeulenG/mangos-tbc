@@ -273,7 +273,11 @@ class ChatHandler
         bool HandleDebugByteFields(char* args);
         bool HandleDebugSpellVisual(char* args);
         bool HandleDebugMoveflags(char* args);
-        bool HandleDebugLootDropStats(char* args);
+
+        bool LootStatsHelper(char* args, bool full);
+        bool HandleLootStatsCommand(char* args);
+        bool HandleLootFullStatsCommand(char* args);
+
         bool HandleDebugOverflowCommand(char* args);
         bool HandleDebugChatFreezeCommand(char* args);
 
@@ -360,6 +364,7 @@ class ChatHandler
         bool HandleGoXYCommand(char* args);
         bool HandleGoXYZCommand(char* args);
         bool HandleGoZoneXYCommand(char* args);
+        bool HandleGoNextCommand(char* args);
 
         bool HandleGuildCreateCommand(char* args);
         bool HandleGuildInviteCommand(char* args);
@@ -597,7 +602,6 @@ class ChatHandler
         bool HandleReloadSkillFishingBaseLevelCommand(char* args);
         bool HandleReloadSpellAffectCommand(char* args);
         bool HandleReloadSpellAreaCommand(char* args);
-        bool HandleReloadSpellBonusesCommand(char* args);
         bool HandleReloadSpellChainCommand(char* args);
         bool HandleReloadSpellElixirCommand(char* args);
         bool HandleReloadSpellLearnSpellCommand(char* args);
@@ -798,6 +802,7 @@ class ChatHandler
         bool HandleSunwellGateCommand(char* args);
         bool HandleSunwellGateCounterCommand(char* args);
         bool HandleExpansionRelease(char* args);
+        bool HandleSetVariable(char* args);
 
         // Battleground
         bool HandleBattlegroundStartCommand(char* args);

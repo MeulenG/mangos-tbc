@@ -35,6 +35,7 @@
 #include "Maps/InstanceData.h"
 #include "Cinematics/M2Stores.h"
 #include "Entities/Transports.h"
+#include <string>
 
 bool ChatHandler::HandleDebugSendSpellFailCommand(char* args)
 {
@@ -1292,8 +1293,6 @@ bool ChatHandler::HandleDebugSpellCoefsCommand(char* args)
     if (!spellEntry)
         return false;
 
-    SpellBonusEntry const* bonus = sSpellMgr.GetSpellBonusData(spellid);
-
     float direct_calc = CalculateDefaultCoefficient(spellEntry, SPELL_DIRECT_DAMAGE);
     float dot_calc = CalculateDefaultCoefficient(spellEntry, DOT);
 
@@ -1326,9 +1325,9 @@ bool ChatHandler::HandleDebugSpellCoefsCommand(char* args)
     char const* dotDamageStr = GetMangosString(LANG_DOT_DAMAGE);
 
     PSendSysMessage(LANG_SPELLCOEFS, spellid, isDirectHeal ? directHealStr : directDamageStr,
-                    direct_calc, direct_calc * 1.88f, bonus ? bonus->direct_damage : 0.0f, bonus ? bonus->ap_bonus : 0.0f);
+                    direct_calc, direct_calc * 1.88f, spellEntry->effectBonusCoefficient[0], 0.0f);
     PSendSysMessage(LANG_SPELLCOEFS, spellid, isDotHeal ? dotHealStr : dotDamageStr,
-                    dot_calc, dot_calc * 1.88f, bonus ? bonus->dot_damage : 0.0f, bonus ? bonus->ap_dot_bonus : 0.0f);
+                    dot_calc, dot_calc * 1.88f, spellEntry->effectBonusCoefficient[0], 0.0f);
 
     return true;
 }
@@ -1528,87 +1527,6 @@ bool ChatHandler::HandleSD2ScriptCommand(char* args)
         data->ExecuteChatCommand(this, args);
     else
         PSendSysMessage("Map script does not support chat commands.");
-    return true;
-}
-
-bool ChatHandler::HandleDebugLootDropStats(char* args)
-{
-    uint32 amountOfCheck = 100000;
-    uint32 lootId = 0;
-    std::string lootStore;
-
-    Creature* target = getSelectedCreature();
-    if (!target)
-    {
-        bool usageError = false;
-        char* storeStr = nullptr;
-        if (!ExtractUInt32(&args, lootId))
-            usageError = true;
-
-        if (!usageError)
-        {
-            storeStr = ExtractLiteralArg(&args);
-            if (!storeStr && *args)
-                usageError = true;
-
-            if (!usageError && *args && !ExtractUInt32(&args, amountOfCheck))
-                usageError = true;
-        }
-
-        if (usageError)
-        {
-            SendSysMessage("Usage: .debug lootdropstats lootId [lootTemplate amountOfCheck]");
-            SetSentErrorMessage(true);
-            return false;
-        }
-
-        if (storeStr)
-        {
-            lootStore = storeStr;
-            if (lootStore == "creature" || lootStore == "c")
-                lootStore = "creature";
-            else if (lootStore == "gameobject" || lootStore == "gob")
-                lootStore = "gameobject";
-            else if (lootStore == "fishing" || lootStore == "f")
-                lootStore = "fishing";
-            else if (lootStore == "item" || lootStore == "i")
-                lootStore = "item";
-            else if (lootStore == "pickpocketing" || lootStore == "pick")
-                lootStore = "pickpocketing";
-            else if (lootStore == "skinning" || lootStore == "skin")
-                lootStore = "skinning";
-            else if (lootStore == "disenchanting" || lootStore == "dis")
-                lootStore = "disenchanting";
-            else if (lootStore == "prospecting" || lootStore == "prosp")
-                lootStore = "prospecting";
-            else if (lootStore == "mail" || lootStore == "m")
-                lootStore = "mail";
-            else
-            {
-                PSendSysMessage("Provided loot template is not valid should be:");
-                PSendSysMessage("creature");
-                PSendSysMessage("gameobject");
-                PSendSysMessage("fishing");
-                PSendSysMessage("item");
-                PSendSysMessage("pickpocketing");
-                PSendSysMessage("skinning");
-                PSendSysMessage("disenchanting");
-                PSendSysMessage("prospecting");
-                PSendSysMessage("mail");
-                return true;
-            }
-        }
-        else
-            lootStore = "creature";
-    }
-    else
-    {
-        lootStore = "creature";
-        lootId = target->GetCreatureInfo()->LootId;
-        ExtractUInt32(&args, amountOfCheck);
-    }
-
-    sLootMgr.CheckDropStats(*this, amountOfCheck, lootId, lootStore);
     return true;
 }
 

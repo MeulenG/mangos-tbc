@@ -849,7 +849,7 @@ bool ChatHandler::HandleGameObjectTargetCommand(char* args)
         uint32 id;
         if (ExtractUInt32(&cId, id))
         {
-            queryResult = WorldDatabase.PQuery("SELECT guid, id, position_x, position_y, position_z, orientation, map, (POW(position_x - '%f', 2) + POW(position_y - '%f', 2) + POW(position_z - '%f', 2)) AS order_ FROM gameobject WHERE map = '%i' AND guid = '%u' ORDER BY order_ ASC LIMIT 1",
+            queryResult = WorldDatabase.PQuery("SELECT guid, id, position_x, position_y, position_z, orientation, map, (POW(position_x - %f, 2) + POW(position_y - %f, 2) + POW(position_z - %f, 2)) AS order_ FROM gameobject WHERE map = '%i' AND guid = '%u' ORDER BY order_ ASC LIMIT 1",
                                           pl->GetPositionX(), pl->GetPositionY(), pl->GetPositionZ(), pl->GetMapId(), id);
         }
         else
@@ -1227,8 +1227,8 @@ bool ChatHandler::HandleGameObjectNearCommand(char* args)
 
     Player* pl = m_session->GetPlayer();
     auto queryResult = WorldDatabase.PQuery("SELECT guid, id, position_x, position_y, position_z, map, "
-                          "(POW(position_x - '%f', 2) + POW(position_y - '%f', 2) + POW(position_z - '%f', 2)) AS order_ "
-                          "FROM gameobject WHERE map='%u' AND (POW(position_x - '%f', 2) + POW(position_y - '%f', 2) + POW(position_z - '%f', 2)) <= '%f' ORDER BY order_",
+                          "(POW(position_x - %f, 2) + POW(position_y - %f, 2) + POW(position_z - %f, 2)) AS order_ "
+                          "FROM gameobject WHERE map='%u' AND (POW(position_x - %f, 2) + POW(position_y - %f, 2) + POW(position_z - %f, 2)) <= %f ORDER BY order_",
                           pl->GetPositionX(), pl->GetPositionY(), pl->GetPositionZ(),
                           pl->GetMapId(), pl->GetPositionX(), pl->GetPositionY(), pl->GetPositionZ(), distance * distance);
 
@@ -1924,7 +1924,13 @@ bool ChatHandler::HandleNpcDeleteCommand(char* args)
             unit->CombatStop();
             if (CreatureData const* data = sObjectMgr.GetCreatureData(unit->GetDbGuid()))
             {
-                Creature::AddToRemoveListInMaps(unit->GetDbGuid(), data);
+                // chat commands execute in world thread so should be thread safe for now
+                sMapMgr.DoForAllMapsWithMapId(data->mapid, [&](Map* map)
+                {
+                    map->GetSpawnManager().RemoveSpawn(unit->GetDbGuid(), HIGHGUID_UNIT);
+                    if (Creature* creature = map->GetCreature(unit->GetDbGuid()))
+                        creature->AddObjectToRemoveList();
+                });
                 Creature::DeleteFromDB(unit->GetDbGuid(), data);
             }
             else
@@ -5303,4 +5309,99 @@ bool ChatHandler::HandleBattlegroundStopCommand(char* /*args*/)
     PSendSysMessage("Battleground stopped [%s][%u]", bg->GetName(), bg->GetInstanceId());
 
     return true;
+}
+
+bool ChatHandler::LootStatsHelper(char* args, bool full)
+{
+    uint32 amountOfCheck = 100000;
+    uint32 lootId = 0;
+    std::string lootStore = "creature";
+    Creature* target = getSelectedCreature();
+
+    const std::string usageStr = "Usage: if you selected a creature you can do:\n"
+        " -> '.loot stats [#amountOfDropCheck]'\n"
+        " else you have to provide loot type and loot entry\n"
+        " -> '.loot stats lootType #lootEntry [#amountOfDropCheck]\n'"
+        " -> lootType can be 'creature', 'gameobject', 'fishing', 'item', 'pickpocketing', 'skinning', 'disenchanting', 'prospecting', 'mail', 'reference'\n"
+        " -> ex: '.loot stats c 448' will show Hogger loot table";
+
+    auto showError = [&]()
+    {
+            if (m_session)
+            {
+            SendSysMessage(usageStr.c_str());
+            SetSentErrorMessage(true);
+        }
+
+        // Output to console
+        sLog.outError("%s", usageStr.c_str());
+
+        SetSentErrorMessage(true);
+    };
+
+    if (target)
+    {
+        lootId = target->GetCreatureInfo()->LootId;
+    }
+    else
+    {
+        if (args != nullptr)
+        {
+            auto argsStr = ExtractLiteralArg(&args);
+            if (!argsStr)
+            {
+                showError();
+                return true;
+            }
+            std::string lootType(argsStr);
+
+            // check if lootType start with correct store name
+            if (lootType.rfind("c", 0) == 0)
+                lootStore = "creature";
+            else if (lootType.rfind("g", 0) == 0)
+                lootStore = "gameobject";
+            else if (lootType.rfind("f", 0) == 0)
+                lootStore = "fishing";
+            else if (lootType.rfind("i", 0) == 0)
+                lootStore = "item";
+            else if (lootType.rfind("pi", 0) == 0)
+                lootStore = "pickpocketing";
+            else if (lootType.rfind("s", 0) == 0)
+                lootStore = "skinning";
+            else if (lootType.rfind("dis", 0) == 0)
+                lootStore = "disenchanting";
+            else if (lootType.rfind("pr", 0) == 0)
+                lootStore = "prospecting";
+            else if (lootType.rfind("m", 0) == 0)
+                lootStore = "mail";
+            else if (lootType.rfind("r", 0) == 0)
+                lootStore = "reference";
+            else
+            {
+                showError();
+                return true;
+            }
+        }
+
+        if (!*args || !ExtractUInt32(&args, lootId))
+        {
+            showError();
+            return true;
+        }
+    }
+
+    ExtractUInt32(&args, amountOfCheck);
+
+    sLootMgr.CheckDropStats(*this, amountOfCheck, lootId, lootStore, full);
+    return  true;
+}
+
+bool ChatHandler::HandleLootStatsCommand(char* args)
+{
+    return LootStatsHelper(args, false);
+}
+
+bool ChatHandler::HandleLootFullStatsCommand(char* args)
+{
+    return LootStatsHelper(args, true);
 }
