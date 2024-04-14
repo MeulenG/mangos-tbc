@@ -38,7 +38,9 @@ enum
     EMOTE_AT_HOME           = -1000324,
     QUEST_MIST              = 938,
     NPC_ARYNIA              = 3519,
-    FACTION_DARNASSUS       = 79
+    FACTION_DARNASSUS       = 79,
+
+    NPC_BLOODFEATHER_HARPY  = 2015
 };
 
 struct npc_mistAI : public FollowerAI
@@ -55,7 +57,8 @@ struct npc_mistAI : public FollowerAI
         {
             if (m_creature->IsWithinDistInMap(pWho, 10.0f))
             {
-                DoScriptText(SAY_AT_HOME, pWho);
+                DoScriptText(SAY_AT_HOME, pWho); 
+                // m_creature->SummonCreature(NPC_BLOODFEATHER_HARPY, )
                 DoComplete();
             }
         }
