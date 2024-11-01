@@ -22,7 +22,7 @@
 #include "Globals/SharedDefines.h"
 #include "Server/WorldSession.h"
 #include "Server/Opcodes.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "World/World.h"
 #include "Globals/ObjectMgr.h"
 #include "Entities/Player.h"
@@ -40,8 +40,13 @@
 #include "AI/ScriptDevAI/ScriptDevAIMgr.h"
 #include "Anticheat/Anticheat.hpp"
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
 #include "PlayerBot/Base/PlayerbotMgr.h"
+#endif
+
+#ifdef ENABLE_PLAYERBOTS
+#include "playerbot/playerbot.h"
+#include "playerbot/PlayerbotAIConfig.h"
 #endif
 
 // config option SkipCinematics supported values
@@ -64,6 +69,108 @@ class LoginQueryHolder : public SqlQueryHolder
         uint32 GetAccountId() const { return m_accountId; }
         bool Initialize();
 };
+
+#ifdef ENABLE_PLAYERBOTS
+class PlayerbotLoginQueryHolder : public LoginQueryHolder
+{
+private:
+    uint32 masterAccountId;
+    PlayerbotHolder* playerbotHolder;
+
+public:
+    PlayerbotLoginQueryHolder(PlayerbotHolder* playerbotHolder, uint32 masterAccount, uint32 accountId, uint32 guid)
+        : LoginQueryHolder(accountId, ObjectGuid(HIGHGUID_PLAYER, guid)), masterAccountId(masterAccount), playerbotHolder(playerbotHolder) { }
+
+public:
+    uint32 GetMasterAccountId() const { return masterAccountId; }
+    PlayerbotHolder* GetPlayerbotHolder() { return playerbotHolder; }
+};
+
+void PlayerbotHolder::AddPlayerBot(uint32 playerGuid, uint32 masterAccount)
+{
+    // has bot already been added?
+    ObjectGuid guid = ObjectGuid(HIGHGUID_PLAYER, playerGuid);
+    Player* bot = sObjectMgr.GetPlayer(guid);
+
+    if (bot && bot->IsInWorld())
+        return;
+
+    uint32 accountId = sObjectMgr.GetPlayerAccountIdByGUID(guid);
+    if (accountId == 0)
+        return;
+
+    PlayerbotLoginQueryHolder* holder = new PlayerbotLoginQueryHolder(this, masterAccount, accountId, playerGuid);
+    if (!holder->Initialize())
+    {
+        delete holder;                                      // delete all unprocessed queries
+        return;
+    }
+
+    CharacterDatabase.DelayQueryHolder(this, &PlayerbotHolder::HandlePlayerBotLoginCallback, holder);
+}
+
+void PlayerbotHolder::HandlePlayerBotLoginCallback(QueryResult* dummy, SqlQueryHolder* holder)
+{
+    if (!holder)
+        return;
+
+    PlayerbotLoginQueryHolder* lqh = (PlayerbotLoginQueryHolder*)holder;
+    uint32 masterAccount = lqh->GetMasterAccountId();
+
+    WorldSession* masterSession = masterAccount ? sWorld.FindSession(masterAccount) : NULL;
+    uint32 botAccountId = lqh->GetAccountId();
+    WorldSession* botSession = new WorldSession(botAccountId, NULL, SEC_PLAYER, 1, 0, LOCALE_enUS, "", 0, 0, false);
+    botSession->SetNoAnticheat();
+
+    // has bot already been added?
+    if (sObjectMgr.GetPlayer(lqh->GetGuid()))
+        return;
+
+    uint32 guid = lqh->GetGuid().GetRawValue();
+
+    botSession->HandlePlayerLogin(lqh); // will delete lqh
+
+    Player* bot = botSession->GetPlayer();
+    if (!bot)
+    {
+        sLog.outError("Error logging in bot %d, please try to reset all random bots", guid);
+        return;
+    }
+
+    bot->RemovePlayerbotMgr();
+
+    sRandomPlayerbotMgr.OnPlayerLogin(bot);
+
+    bool allowed = false;
+    if (botAccountId == masterAccount)
+    {
+        allowed = true;
+    }
+    else if (masterSession && sPlayerbotAIConfig.allowGuildBots && bot->GetGuildId() == masterSession->GetPlayer()->GetGuildId())
+    {
+        allowed = true;
+    }
+    else if (sPlayerbotAIConfig.IsInRandomAccountList(botAccountId))
+    {
+        allowed = true;
+    }
+
+    if (allowed)
+    {
+        OnBotLogin(bot);
+        return;
+    }
+
+    if (masterSession)
+    {
+        ChatHandler ch(masterSession);
+        ch.PSendSysMessage("You are not allowed to control bot %s", bot->GetName());
+    }
+
+    LogoutPlayerBot(bot->GetObjectGuid());
+    sLog.outError("Attempt to add not allowed bot %s, please try to reset all random bots", bot->GetName());
+}
+#endif
 
 bool LoginQueryHolder::Initialize()
 {
@@ -128,10 +235,31 @@ class CharacterHandler
         {
             if (!holder) return;
 
+#ifdef ENABLE_PLAYERBOTS
+            WorldSession* session = sWorld.FindSession(((LoginQueryHolder*)holder)->GetAccountId());
+            if (!session)
+            {
+                delete holder;
+                return;
+            }
+
+            ObjectGuid guid = ((LoginQueryHolder*)holder)->GetGuid();
+            session->HandlePlayerLogin((LoginQueryHolder*)holder);
+
+            Player* player = session->GetPlayer();
+            if (player)
+            {
+                player->CreatePlayerbotMgr();
+                player->GetPlayerbotMgr()->OnPlayerLogin(player);
+                sRandomPlayerbotMgr.OnPlayerLogin(player);
+            }
+#else
             if (WorldSession* session = sWorld.FindSession(((LoginQueryHolder*)holder)->GetAccountId()))
                 session->HandlePlayerLogin((LoginQueryHolder*)holder);
+#endif
         }
-#ifdef BUILD_PLAYERBOT
+
+#ifdef BUILD_DEPRECATED_PLAYERBOT
         // This callback is different from the normal HandlePlayerLoginCallback in that it
         // sets up the bot's world session and also stores the pointer to the bot player in the master's
         // world session m_playerBots map
@@ -501,6 +629,36 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recv_data)
         return;
     }
 
+#ifdef ENABLE_PLAYERBOTS
+    if (pCurrChar && pCurrChar->GetPlayerbotAI())
+    {
+        WorldSession* botSession = pCurrChar->GetSession();
+        SetPlayer(pCurrChar, playerGuid);
+        _player->SetSession(this);
+        _logoutTime = time(0);
+
+        m_sessionDbcLocale = botSession->m_sessionDbcLocale;
+        m_sessionDbLocaleIndex = botSession->m_sessionDbLocaleIndex;
+
+        PlayerbotMgr* mgr = _player->GetPlayerbotMgr();
+        if (!mgr || mgr->GetMaster() != _player)
+        {
+            _player->RemovePlayerbotMgr();
+            _player->CreatePlayerbotMgr();
+            _player->GetPlayerbotMgr()->OnPlayerLogin(_player);
+
+            if (sRandomPlayerbotMgr.GetPlayerBot(playerGuid))
+            {
+                sRandomPlayerbotMgr.MovePlayerBot(playerGuid, _player->GetPlayerbotMgr());
+            }
+            else
+            {
+                _player->GetPlayerbotMgr()->OnBotLogin(_player);
+            }
+        }
+    }
+#endif
+
     if (_player)
     {
         // player is reconnecting
@@ -547,7 +705,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recv_data)
     CharacterDatabase.DelayQueryHolder(&chrHandler, &CharacterHandler::HandlePlayerLoginCallback, holder);
 }
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
 // Can't easily reuse HandlePlayerLoginOpcode for logging in bots because it assumes
 // a WorldSession exists for the bot. The WorldSession for a bot is created after the character is loaded.
 void PlayerbotMgr::LoginPlayerBot(ObjectGuid playerGuid)
@@ -1000,10 +1158,6 @@ void WorldSession::HandleSetFactionAtWarOpcode(WorldPacket& recv_data)
 void WorldSession::HandleMeetingStoneInfoOpcode(WorldPacket& /*recv_data*/)
 {
     DEBUG_LOG("WORLD: Received CMSG_MEETING_STONE_INFO");
-
-    WorldPacket data(SMSG_MEETINGSTONE_SETQUEUE, 5);
-    data << uint32(0) << uint8(6);
-    SendPacket(data);
 }
 
 void WorldSession::HandleTutorialFlagOpcode(WorldPacket& recv_data)

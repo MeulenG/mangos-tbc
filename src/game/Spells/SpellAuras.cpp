@@ -21,7 +21,7 @@
 #include "Server/WorldPacket.h"
 #include "Server/WorldSession.h"
 #include "Server/Opcodes.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "World/World.h"
 #include "Globals/ObjectMgr.h"
 #include "AI/ScriptDevAI/ScriptDevAIMgr.h"
@@ -2110,16 +2110,6 @@ void Aura::HandleAuraDummy(bool apply, bool Real)
             {
                 switch (GetId())
                 {
-                    case 11403:                             // Dream Vision
-                    {
-                        if (target->IsPlayer())
-                        {
-                            Unit* pet = static_cast<Player*>(target)->GetCharm();
-                            if (pet && pet->GetEntry() == 7863)
-                                pet->SetVisibility(VISIBILITY_OFF);
-                        }
-                        break;
-                    }
                     case 1515:                              // Tame beast
                         if (Unit* caster = GetCaster()) // Wotlk - sniff - adds 1000 threat
                             target->AddThreat(caster, 1000.0f, false, GetSpellSchoolMask(GetSpellProto()), GetSpellProto());
@@ -6926,9 +6916,9 @@ void Aura::PeriodicTick()
             uint32 procEx = PROC_EX_NORMAL_HIT | PROC_EX_INTERNAL_HOT;
 
             // add HoTs to amount healed in bgs
-            if (pCaster->GetTypeId() == TYPEID_PLAYER)
-                if (BattleGround* bg = ((Player*)pCaster)->GetBattleGround())
-                    bg->UpdatePlayerScore(((Player*)pCaster), SCORE_HEALING_DONE, gain);
+            if (pCaster->IsPlayer())
+                if (BattleGround* bg = static_cast<Player*>(pCaster)->GetBattleGround())
+                    bg->UpdatePlayerScore(static_cast<Player*>(pCaster), SCORE_HEALING_DONE, gain);
 
             if (pCaster->IsInCombat() && !pCaster->IsCrowdControlled())
                 target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto, false, true);

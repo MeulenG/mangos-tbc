@@ -27,7 +27,7 @@
 #include "Entities/Player.h"
 #include "Entities/GameObject.h"
 #include "Chat/Chat.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Guilds/Guild.h"
 #include "Guilds/GuildMgr.h"
 #include "Globals/ObjectAccessor.h"
@@ -65,6 +65,8 @@
 #include "Globals/UnitCondition.h"
 #include "Globals/CombatCondition.h"
 #include "World/WorldStateExpression.h"
+
+#include "MotionGenerators/MoveMap.h"
 
 #ifdef BUILD_AHBOT
 #include "AuctionHouseBot/AuctionHouseBot.h"
@@ -5584,6 +5586,21 @@ bool ChatHandler::HandleGMFlyCommand(char* args)
 
     target->SetCanFly(value);
     PSendSysMessage(LANG_COMMAND_FLYMODE_STATUS, GetNameLink(target).c_str(), args);
+    return true;
+}
+
+bool ChatHandler::HandleGMUnkillableCommand(char* args)
+{
+    bool value;
+    if (!ExtractOnOff(&args, value))
+    {
+        SendSysMessage(LANG_USE_BOL);
+        SetSentErrorMessage(true);
+        return false;
+    }
+    Player* target = m_session->GetPlayer();
+    target->SetDeathPrevention(value);
+    PSendSysMessage("GM Unkillability %s.", value ? "enabled" : "disabled");
     return true;
 }
 

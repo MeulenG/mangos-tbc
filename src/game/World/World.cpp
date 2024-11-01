@@ -25,7 +25,7 @@
 #include "Config/Config.h"
 #include "Platform/Define.h"
 #include "SystemConfig.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Server/Opcodes.h"
 #include "Server/WorldSession.h"
 #include "Server/WorldPacket.h"
@@ -76,6 +76,12 @@
  #include "Metric/Metric.h"
 #endif
 
+#ifdef ENABLE_PLAYERBOTS
+#include "ahbot/AhBot.h"
+#include "playerbot/PlayerbotAIConfig.h"
+#include "playerbot/RandomPlayerbotMgr.h"
+#endif
+
 #include <algorithm>
 #include <mutex>
 #include <cstdarg>
@@ -99,6 +105,13 @@ uint32 World::m_relocation_ai_notify_delay = 1000u;
 uint32 World::m_currentMSTime = 0;
 TimePoint World::m_currentTime = TimePoint();
 uint32 World::m_currentDiff = 0;
+#ifdef ENABLE_PLAYERBOTS
+uint32 World::m_currentDiffSum = 0;
+uint32 World::m_currentDiffSumIndex = 0;
+uint32 World::m_averageDiff = 0;
+uint32 World::m_maxDiff = 0;
+std::list<uint32> World::m_histDiff;
+#endif
 
 /// World constructor
 World::World() : mail_timer(0), mail_timer_expires(0), m_NextDailyQuestReset(0), m_NextWeeklyQuestReset(0), m_NextMonthlyQuestReset(0), m_opcodeCounters(NUM_MSG_TYPES)
@@ -145,11 +158,17 @@ World::~World()
 
     VMAP::VMapFactory::clear();
     MMAP::MMapFactory::clear();
+
+    m_lfgQueueThread.join();
+    m_bgQueueThread.join();
 }
 
 /// Cleanups before world stop
 void World::CleanupsBeforeStop()
 {
+#ifdef ENABLE_PLAYERBOTS
+    sRandomPlayerbotMgr.LogoutAllBots();
+#endif
     KickAll(true);                                   // save and kick all players
     UpdateSessions(1);                               // real players unload required UpdateSessions call
     sBattleGroundMgr.DeleteAllBattleGrounds();       // unload battleground templates before different singletons destroyed
@@ -543,6 +562,8 @@ void World::LoadConfigSettings(bool reload)
 
     setConfigMinMax(CONFIG_UINT32_START_ARENA_POINTS, "StartArenaPoints", 0, 0, getConfig(CONFIG_UINT32_MAX_ARENA_POINTS));
 
+    setConfig(CONFIG_BOOL_ALWAYS_SHOW_QUEST_GREETING, "AlwaysShowQuestGreeting", false);
+
     setConfig(CONFIG_BOOL_TAXI_FLIGHT_CHAT_FIX, "TaxiFlightChatFix", false);
     setConfig(CONFIG_BOOL_LONG_TAXI_PATHS_PERSISTENCE, "LongFlightPathsPersistence", false);
     setConfig(CONFIG_BOOL_ALL_TAXI_PATHS, "AllFlightPaths", false);
@@ -834,8 +855,11 @@ void World::LoadConfigSettings(bool reload)
 
     setConfig(CONFIG_BOOL_MMAP_ENABLED, "mmap.enabled", true);
     std::string ignoreMapIds = sConfig.GetStringDefault("mmap.ignoreMapIds");
+    setConfig(CONFIG_BOOL_PRELOAD_MMAP_TILES, "mmap.preload", false);
     MMAP::MMapFactory::preventPathfindingOnMaps(ignoreMapIds.c_str());
-    sLog.outString("WORLD: MMap pathfinding %sabled", getConfig(CONFIG_BOOL_MMAP_ENABLED) ? "en" : "dis");
+    bool enabledPathfinding = getConfig(CONFIG_BOOL_MMAP_ENABLED);
+    sLog.outString("WORLD: MMap pathfinding %sabled", enabledPathfinding ? "en" : "dis");
+    MMAP::MMapFactory::createOrGetMMapManager()->SetEnabled(enabledPathfinding);
 
     setConfig(CONFIG_BOOL_PATH_FIND_OPTIMIZE, "PathFinder.OptimizePath", true);
     setConfig(CONFIG_BOOL_PATH_FIND_NORMALIZE_Z, "PathFinder.NormalizeZ", false);
@@ -845,6 +869,8 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_FLOAT_MAX_RECRUIT_A_FRIEND_DISTANCE, "Raf.Distance", 100.f);
 
     setConfig(CONFIG_UINT32_SUNSREACH_COUNTER, "Sunsreach.CounterMax", 10000);
+
+    setConfig(CONFIG_BOOL_LFG_ENABLED, "Lfg.Enabled", true);
 
     sLog.outString();
 }
@@ -899,6 +925,8 @@ void World::SetInitialWorldSettings()
     ///- Remove the bones (they should not exist in DB though) and old corpses after a restart
     CharacterDatabase.PExecute("DELETE FROM corpse WHERE corpse_type = '0' OR time < (" _UNIXTIME_ "-'%u')", 3 * DAY);
 
+    m_bgQueue.SetNextRatingDiscardUpdate(std::chrono::milliseconds(sWorld.getConfig(CONFIG_UINT32_ARENA_RATING_DISCARD_TIMER)));
+
     /// load spell_dbc first! dbc's need them
     sLog.outString("Loading spell_template...");
     sObjectMgr.LoadSpellTemplate();
@@ -919,6 +947,16 @@ void World::SetInitialWorldSettings()
     LoadDBCStores(m_dataPath);
     DetectDBCLang();
     sObjectMgr.SetDbc2StorageLocaleIndex(GetDefaultDbcLocale());    // Get once for all the locale index of DBC language (console/broadcasts)
+
+    if (VMAP::IVMapManager* vmmgr2 = VMAP::VMapFactory::createOrGetVMapManager()) // after map store init
+    {
+        std::vector<uint32> mapIds;
+        for (uint32 mapId = 0; mapId < sMapStore.GetNumRows(); mapId++)
+            if (sMapStore.LookupEntry(mapId))
+                mapIds.push_back(mapId);
+
+        vmmgr2->InitializeThreadUnsafe(mapIds);
+    }
 
     // Loading cameras for characters creation cinematic
     sLog.outString("Loading cinematic...");
@@ -958,7 +996,7 @@ void World::SetInitialWorldSettings()
 
     sLog.outString("Loading Game Object Templates...");     // must be after LoadPageTexts
     std::vector<uint32> transportDisplayIds = sObjectMgr.LoadGameobjectInfo();
-    MMAP::MMapFactory::createOrGetMMapManager()->loadAllGameObjectModels(transportDisplayIds);
+    MMAP::MMapFactory::createOrGetMMapManager()->loadAllGameObjectModels(GetDataPath(), transportDisplayIds);
 
     sLog.outString("Loading GameObject models...");
     LoadGameObjectModelList();
@@ -1381,7 +1419,7 @@ void World::SetInitialWorldSettings()
     ///- Initialize Battlegrounds
     sLog.outString("Starting BattleGround System");
     sBattleGroundMgr.CreateInitialBattleGrounds();
-    sBattleGroundMgr.InitAutomaticArenaPointDistribution();
+    m_bgQueue.InitAutomaticArenaPointDistribution();
     CheckLootTemplates_Reference(ids_set);
 
     sLog.outString("Deleting expired bans...");
@@ -1435,10 +1473,17 @@ void World::SetInitialWorldSettings()
     m_timers[WUPDATE_METRICS].SetInterval(1 * IN_MILLISECONDS);
 #endif // BUILD_METRICS
 
-
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
     PlayerbotMgr::SetInitialWorldSettings();
 #endif
+
+#ifdef ENABLE_PLAYERBOTS
+    sPlayerbotAIConfig.Initialize();
+#ifndef BUILD_AHBOT
+    auctionbot.Init();
+#endif
+#endif
+
     sLog.outString("---------------------------------------");
     sLog.outString("      CMANGOS: World initialized       ");
     sLog.outString("---------------------------------------");
@@ -1502,6 +1547,33 @@ void World::Update(uint32 diff)
     m_currentTime = std::chrono::time_point_cast<std::chrono::milliseconds>(Clock::now());
     m_currentDiff = diff;
 
+#ifdef ENABLE_PLAYERBOTS
+    m_currentDiffSum += diff;
+    m_currentDiffSumIndex++;
+
+    m_histDiff.push_back(diff);
+    m_maxDiff = std::max(m_maxDiff, diff);
+
+    while (m_histDiff.size() >= 600)
+    {
+        m_currentDiffSum -= m_histDiff.front();
+        m_histDiff.pop_front();
+    }
+
+    m_averageDiff = (uint32)(m_currentDiffSum / m_histDiff.size());
+
+    if (m_currentDiffSumIndex && m_currentDiffSumIndex % 60 == 0)
+    {
+        sLog.outBasic("Avg Diff: %u. Sessions online: %u.", m_averageDiff, (uint32)GetActiveSessionCount());
+        sLog.outBasic("Max Diff: %u.", m_maxDiff);
+    }
+
+    if (m_currentDiffSum % 3000 == 0)
+    {
+        m_maxDiff = *std::max_element(m_histDiff.begin(), m_histDiff.end());
+    }
+#endif
+
     ///- Update the different timers
     for (auto& m_timer : m_timers)
     {
@@ -1555,6 +1627,19 @@ void World::Update(uint32 diff)
         sAuctionHouseBot.Update();
         m_timers[WUPDATE_AHBOT].Reset();
     }
+#endif
+
+#ifdef ENABLE_PLAYERBOTS
+#ifndef BUILD_AHBOT
+    /// <li> Handle AHBot operations
+    if (m_timers[WUPDATE_AHBOT].Passed())
+    {
+        auctionbot.Update();
+        m_timers[WUPDATE_AHBOT].Reset();
+    }
+#endif
+    sRandomPlayerbotMgr.UpdateAI(diff);
+    sRandomPlayerbotMgr.UpdateSessions(diff);
 #endif
 
     /// <li> Handle session updates
@@ -2800,4 +2885,20 @@ void World::LoadWorldSafeLocs() const
 {
     sWorldSafeLocsStore.Load(true);
     sLog.outString(">> Loaded %u world safe locs", sWorldSafeLocsStore.GetRecordCount());
+}
+
+void World::StartLFGQueueThread()
+{
+    m_lfgQueueThread = std::thread([&]()
+    {
+        m_lfgQueue.Update();
+    });
+}
+
+void World::StartBGQueueThread()
+{
+    m_bgQueueThread = std::thread([&]()
+    {
+        m_bgQueue.Update();
+    });
 }

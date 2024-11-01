@@ -19,7 +19,7 @@
 #include "Entities/Player.h"
 #include "Tools/Language.h"
 #include "Database/DatabaseEnv.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Server/Opcodes.h"
 #include "AI/ScriptDevAI/ScriptDevAIMgr.h"
 #include "World/World.h"
@@ -65,10 +65,15 @@
 #include "World/WorldState.h"
 #include "Anticheat/Anticheat.hpp"
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
 #include "PlayerBot/Base/PlayerbotAI.h"
 #include "PlayerBot/Base/PlayerbotMgr.h"
 #include "Config/Config.h"
+#endif
+
+#ifdef ENABLE_PLAYERBOTS
+#include "playerbot/playerbot.h"
+#include "playerbot/PlayerbotAIConfig.h"
 #endif
 
 #include <cmath>
@@ -87,7 +92,7 @@
 #define SKILL_PERM_BONUS(x)    int16(PAIR32_HIPART(x))
 #define MAKE_SKILL_BONUS(t, p) MAKE_PAIR32(t,p)
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
 extern Config botConfig;
 #endif
 
@@ -477,9 +482,9 @@ void TradeData::SetAccepted(bool state, bool crosssend /*= false*/)
 
 Player::Player(WorldSession* session): Unit(), m_taxiTracker(*this), m_mover(this), m_camera(this), m_reputationMgr(this), m_launched(false)
 {
-#ifdef BUILD_PLAYERBOT
-    m_playerbotAI = 0;
-    m_playerbotMgr = 0;
+#if defined(BUILD_DEPRECATED_PLAYERBOT) || defined(ENABLE_PLAYERBOTS)
+    m_playerbotAI = nullptr;
+    m_playerbotMgr = nullptr;
 #endif
     m_speakTime = 0;
     m_speakCount = 0;
@@ -689,18 +694,24 @@ Player::~Player()
         for (BoundInstancesMap::iterator itr = m_boundInstance.begin(); itr != m_boundInstance.end(); ++itr)
             itr->second.state->RemovePlayer(this);
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
     if (m_playerbotAI)
     {
         delete m_playerbotAI;
-        m_playerbotAI = 0;
+        m_playerbotAI = nullptr;
     }
     if (m_playerbotMgr)
     {
         delete m_playerbotMgr;
-        m_playerbotMgr = 0;
+        m_playerbotMgr = nullptr;
     }
 #endif
+
+#ifdef ENABLE_PLAYERBOTS
+    RemovePlayerbotAI();
+    RemovePlayerbotMgr();
+#endif
+
     delete m_declinedname;
 }
 
@@ -1565,6 +1576,9 @@ void Player::Update(const uint32 diff)
     {
         if (diff >= m_DetectInvTimer)
         {
+#ifdef ENABLE_PLAYERBOTS
+            if (isRealPlayer())
+#endif
             HandleStealthedUnitsDetection();
             m_DetectInvTimer = GetMap()->IsBattleGroundOrArena() ? 500 : 2000;
         }
@@ -1620,7 +1634,7 @@ void Player::Update(const uint32 diff)
     if (IsHasDelayedTeleport() && !m_semaphoreTeleport_Near)
         TeleportTo(m_teleport_dest, m_teleport_options);
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
     if (m_playerbotAI)
         m_playerbotAI->UpdateAI(diff);
     else if (m_playerbotMgr)
@@ -1633,6 +1647,43 @@ void Player::Heartbeat()
     Unit::Heartbeat();
     SendUpdateToOutOfRangeGroupMembers();
 }
+
+#ifdef ENABLE_PLAYERBOTS
+void Player::CreatePlayerbotAI()
+{
+    assert(!m_playerbotAI);
+    m_playerbotAI = std::make_unique<PlayerbotAI>(this);
+}
+
+void Player::RemovePlayerbotAI()
+{
+    m_playerbotAI = nullptr;
+}
+
+void Player::CreatePlayerbotMgr()
+{
+    assert(!m_playerbotMgr);
+    m_playerbotMgr = std::make_unique<PlayerbotMgr>(this);
+}
+
+void Player::RemovePlayerbotMgr()
+{
+    m_playerbotMgr = nullptr;
+}
+
+void Player::UpdateAI(const uint32 diff, bool minimal)
+{
+    if (m_playerbotAI)
+    {
+        m_playerbotAI->UpdateAI(diff);
+    }
+
+    if (m_playerbotMgr)
+    {
+        m_playerbotMgr->UpdateAI(diff);
+    }
+}
+#endif
 
 void Player::SetDeathState(DeathState s)
 {
@@ -1931,7 +1982,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
 
     MapEntry const* mEntry = sMapStore.LookupEntry(mapid);  // Validity checked in IsValidMapCoord
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
     // If this user has bots, tell them to stop following master
     // so they don't try to follow the master after the master teleports
     if (GetPlayerbotMgr())
@@ -4690,6 +4741,15 @@ void Player::DurabilityLossAll(double percent, bool inventory)
 
 void Player::DurabilityLoss(Item* item, double percent)
 {
+#ifdef ENABLE_PLAYERBOTS
+    PlayerbotAI* bot = GetPlayerbotAI();
+    if (bot)
+    {
+        bot->DurabilityLoss(item, percent);
+        return;
+    }
+#endif
+
     if (!item)
         return;
 
@@ -8655,6 +8715,33 @@ Item* Player::GetItemByPos(uint8 bag, uint8 slot) const
     return nullptr;
 }
 
+Item* Player::GetItemByEntry(uint32 item) const
+{
+    for (int i = EQUIPMENT_SLOT_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+    {
+        if (Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+        {
+            if (pItem->GetEntry() == item)
+            {
+                return pItem;
+            }
+        }
+    }
+
+    for (int i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
+    {
+        if (Bag* pBag = (Bag*)GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+        {
+            if (Item* itemPtr = pBag->GetItemByEntry(item))
+            {
+                return itemPtr;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
 uint32 Player::GetItemDisplayIdInSlot(uint8 bag, uint8 slot) const
 {
     const Item* pItem = GetItemByPos(bag, slot);
@@ -12126,7 +12213,6 @@ void Player::SendNewItem(Item* item, uint32 count, bool received, bool created, 
     if (!item)                                              // prevent crash
         return;
 
-    // last check 2.0.10
     WorldPacket data(SMSG_ITEM_PUSH_RESULT, (8 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4));
     data << GetObjectGuid();                                // player GUID
     data << uint32(received);                               // 0=looted, 1=from npc
@@ -12255,7 +12341,7 @@ void Player::PrepareGossipMenu(WorldObject* pSource, uint32 menuId, bool forceQu
                     break;                                  // no checks
                 case GOSSIP_OPTION_BOT:
                 {
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
                     if (botConfig.GetBoolDefault("PlayerbotAI.DisableBots", false) && !pCreature->isInnkeeper())
                     {
                         ChatHandler(this).PSendSysMessage("|cffff0000Playerbot system is currently disabled!");
@@ -12533,7 +12619,7 @@ void Player::OnGossipSelect(WorldObject* pSource, uint32 gossipListId, uint32 me
         case GOSSIP_OPTION_AUCTIONEER:
             GetSession()->SendAuctionHello(((Creature*)pSource));
             break;
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
         case GOSSIP_OPTION_BOT:
         {
             // DEBUG_LOG("GOSSIP_OPTION_BOT");
@@ -12753,7 +12839,8 @@ void Player::SendPreparedQuest(ObjectGuid guid) const
     else
         type = QUESTGIVER_GAMEOBJECT;
 
-    if (QuestgiverGreeting const* data = sObjectMgr.GetQuestgiverGreetingData(guid.GetEntry(), type))
+    QuestgiverGreeting const* data = sObjectMgr.GetQuestgiverGreetingData(guid.GetEntry(), type);
+    if (data && (questMenu.MenuItemCount() > 1 || sWorld.getConfig(CONFIG_BOOL_ALWAYS_SHOW_QUEST_GREETING)))
     {
         QEmote qe;
         qe._Delay = data->emoteDelay;
@@ -13163,7 +13250,11 @@ void Player::AddQuest(Quest const* pQuest, Object* questGiver)
         questStatusData.uState = QUEST_CHANGED;
 
     // quest accept scripts
+#ifdef ENABLE_PLAYERBOTS
+    if (questGiver && this != questGiver)
+#else
     if (questGiver)
+#endif
     {
         switch (questGiver->GetTypeId())
         {
@@ -13370,6 +13461,10 @@ void Player::RewardQuest(Quest const* pQuest, uint32 reward, Object* questGiver,
 
     bool handled = false;
 
+#ifdef ENABLE_PLAYERBOTS
+    if (this != questGiver)
+    {
+#endif
     switch (questGiver->GetTypeId())
     {
         case TYPEID_UNIT:
@@ -13379,9 +13474,17 @@ void Player::RewardQuest(Quest const* pQuest, uint32 reward, Object* questGiver,
             handled = sScriptDevAIMgr.OnQuestRewarded(this, (GameObject*)questGiver, pQuest);
             break;
     }
+#ifdef ENABLE_PLAYERBOTS
+    }
 
+    if (this != questGiver)
+    {
+#endif
     if (!handled && pQuest->GetQuestCompleteScript() != 0)
         GetMap()->ScriptsStart(SCRIPT_TYPE_QUEST_END, pQuest->GetQuestCompleteScript(), questGiver, this, Map::SCRIPT_EXEC_PARAM_UNIQUE_BY_SOURCE);
+#ifdef ENABLE_PLAYERBOTS
+    }
+#endif
 
     // Find spell cast on spell reward if any, then find the appropriate caster and cast it
     uint32 spellId = pQuest->GetRewSpellCast();
@@ -14674,7 +14777,7 @@ void Player::SendQuestConfirmAccept(const Quest* pQuest, Player* pReceiver) cons
     }
 }
 
-void Player::SendPushToPartyResponse(Player* pPlayer, uint32 msg) const
+void Player::SendPushToPartyResponse(Player* pPlayer, QuestShareMessages msg) const
 {
     if (pPlayer)
     {
@@ -15169,7 +15272,10 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder* holder)
         {
             GameObjectInfo const* transportInfo = sGOStorage.LookupEntry<GameObjectInfo>(data->id);
             if (transportInfo->type == GAMEOBJECT_TYPE_TRANSPORT)
+            {
                 guid = ObjectGuid(HIGHGUID_GAMEOBJECT, data->id, transGUID);
+                m_movementInfo.t_guid = guid;
+            }
         }
         GenericTransport* transport = GetMap()->GetTransport(guid);
         Map* map = GetMap();
@@ -16949,10 +17055,17 @@ void Player::_SaveInventory()
     }
 
     // update enchantment durations
+#ifdef ENABLE_PLAYERBOTS
+    if (!GetPlayerbotAI())
+    {
+#endif
     for (EnchantDurationList::const_iterator itr = m_enchantDuration.begin(); itr != m_enchantDuration.end(); ++itr)
     {
         itr->item->SetEnchantmentDuration(itr->slot, itr->leftduration);
     }
+#ifdef ENABLE_PLAYERBOTS
+    }
+#endif
 
     // if no changes
     if (m_itemUpdateQueue.empty()) return;
@@ -19523,6 +19636,12 @@ void Player::SendInitialPacketsAfterAddToMap()
 
     SendExtraAuraDurationsOnLogin(true);
     SendExtraAuraDurationsOnLogin(false);
+
+    if (!sWorld.getConfig(CONFIG_BOOL_LFG_ENABLED))
+    {
+        WorldPacket data(SMSG_LFG_DISABLED);
+        GetSession()->SendPacket(data);
+    }
 }
 
 void Player::SendUpdateToOutOfRangeGroupMembers()
@@ -19903,7 +20022,7 @@ BattleGround* Player::GetBattleGround() const
     if (GetBattleGroundId() == 0)
         return nullptr;
 
-    return sBattleGroundMgr.GetBattleGround(GetBattleGroundId(), m_bgData.bgTypeID);
+    return GetMap()->GetBG();
 }
 
 bool Player::InArena() const
@@ -19923,43 +20042,6 @@ bool Player::GetBGAccessByLevel(BattleGroundTypeId bgTypeId) const
         return false;
 
     return true;
-}
-
-uint32 Player::GetMinLevelForBattleGroundBracketId(BattleGroundBracketId bracket_id, BattleGroundTypeId bgTypeId)
-{
-    if (bracket_id < 1)
-        return 0;
-
-    if (bracket_id > BG_BRACKET_ID_LAST)
-        bracket_id = BG_BRACKET_ID_LAST;
-
-    BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId);
-    assert(bg);
-    return 10 * bracket_id + bg->GetMinLevel();
-}
-
-uint32 Player::GetMaxLevelForBattleGroundBracketId(BattleGroundBracketId bracket_id, BattleGroundTypeId bgTypeId)
-{
-    if (bracket_id >= BG_BRACKET_ID_LAST)
-        return 255;                                         // hardcoded max level
-
-    // for example EOTS - min level 61 but max level for bracket 69
-    return (GetMinLevelForBattleGroundBracketId(bracket_id, bgTypeId) / 10 * 10) + 9;
-}
-
-BattleGroundBracketId Player::GetBattleGroundBracketIdFromLevel(BattleGroundTypeId bgTypeId) const
-{
-    BattleGround* bg = sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId);
-    assert(bg);
-    if (GetLevel() < bg->GetMinLevel())
-        return BG_BRACKET_ID_FIRST;
-
-    // for example EOTS - min level 61 but max level for bracket 69
-    uint32 bracket_id = (GetLevel() - (bg->GetMinLevel() / 10 * 10)) / 10;
-    if (bracket_id > MAX_BATTLEGROUND_BRACKETS)
-        return BG_BRACKET_ID_LAST;
-
-    return BattleGroundBracketId(bracket_id);
 }
 
 float Player::GetReputationPriceDiscount(Creature const* creature) const
@@ -20984,6 +21066,164 @@ void Player::learnSpellHighRank(uint32 spellid)
     sSpellMgr.doForHighRanks(spellid, worker);
 }
 
+#ifdef ENABLE_PLAYERBOTS
+void Player::learnClassLevelSpells(bool includeHighLevelQuestRewards)
+{
+    ChrClassesEntry const* clsEntry = sChrClassesStore.LookupEntry(getClass());
+    if (!clsEntry)
+        return;
+
+    uint32 family = clsEntry->spellfamily;
+
+    // special cases which aren't sourced from trainers and normally require quests to obtain - added here for convenience
+    ObjectMgr::QuestMap const& qTemplates = sObjectMgr.GetQuestTemplates();
+    for (const auto& qTemplate : qTemplates)
+    {
+        Quest const* quest = qTemplate.second;
+        if (!quest)
+            continue;
+
+        // only class quests player could do
+        if (quest->GetRequiredClasses() == 0 || !SatisfyQuestClass(quest, false) || !SatisfyQuestRace(quest, false) || !SatisfyQuestLevel(quest, false))
+            continue;
+
+        // custom filter for scripting purposes
+        if (!includeHighLevelQuestRewards && quest->GetMinLevel() >= 60)
+            continue;
+
+        learnQuestRewardedSpells(quest);
+    }
+
+    // learn trainer spells
+    for (uint32 id = 0; id < sCreatureStorage.GetMaxEntry(); ++id)
+    {
+        CreatureInfo const* co = sCreatureStorage.LookupEntry<CreatureInfo>(id);
+        if (!co)
+            continue;
+
+        if (co->TrainerType != TRAINER_TYPE_CLASS)
+            continue;
+
+        if (co->TrainerType == TRAINER_TYPE_CLASS && co->TrainerClass != getClass())
+            continue;
+
+        uint32 trainerId = co->TrainerTemplateId;
+        if (!trainerId)
+            trainerId = co->Entry;
+
+        TrainerSpellData const* trainer_spells = sObjectMgr.GetNpcTrainerTemplateSpells(trainerId);
+        if (!trainer_spells)
+            trainer_spells = sObjectMgr.GetNpcTrainerSpells(trainerId);
+
+        if (!trainer_spells)
+            continue;
+
+        for (TrainerSpellMap::const_iterator itr = trainer_spells->spellList.begin(); itr != trainer_spells->spellList.end(); ++itr)
+        {
+            TrainerSpell const* tSpell = &itr->second;
+
+            if (!tSpell)
+                continue;
+
+            uint32 reqLevel = 0;
+
+            // skip wrong class/race skills
+            if (!IsSpellFitByClassAndRace(tSpell->learnedSpell, &reqLevel))
+                continue;
+
+            if (tSpell->conditionId && !sObjectMgr.IsConditionSatisfied(tSpell->conditionId, this, GetMap(), this, CONDITION_FROM_TRAINER))
+                continue;
+
+            // skip spells with first rank learned as talent (and all talents then also)
+            uint32 first_rank = sSpellMgr.GetFirstSpellInChain(tSpell->learnedSpell);
+            reqLevel = tSpell->isProvidedReqLevel ? tSpell->reqLevel : std::max(reqLevel, tSpell->reqLevel);
+            bool isValidTalent = GetTalentSpellCost(first_rank) && HasSpell(first_rank) && reqLevel <= GetLevel();
+
+            TrainerSpellState state = GetTrainerSpellState(tSpell, reqLevel);
+            if (state != TRAINER_SPELL_GREEN && !isValidTalent)
+                continue;
+
+            SpellEntry const* proto = sSpellTemplate.LookupEntry<SpellEntry>(tSpell->learnedSpell);
+            if (!proto)
+                continue;
+
+            // fix activate state for non-stackable low rank (and find next spell for !active case)
+            if (uint32 nextId = sSpellMgr.GetSpellBookSuccessorSpellId(proto->Id))
+            {
+                if (HasSpell(nextId))
+                {
+                    // high rank already known so this must !active
+                    continue;
+                }
+            }
+
+            // skip other spell families (minus a few exceptions)
+            if (proto->SpellFamilyName != family)
+            {
+                SkillLineAbilityMapBounds bounds = sSpellMgr.GetSkillLineAbilityMapBoundsBySpellId(tSpell->learnedSpell);
+                if (bounds.first == bounds.second)
+                    continue;
+
+                SkillLineAbilityEntry const* skillInfo = bounds.first->second;
+                if (!skillInfo)
+                    continue;
+
+                switch (skillInfo->skillId)
+                {
+                case SKILL_SUBTLETY:
+                case SKILL_BEAST_MASTERY:
+                case SKILL_SURVIVAL:
+                case SKILL_DEFENSE:
+                case SKILL_DUAL_WIELD:
+                case SKILL_FERAL_COMBAT:
+                case SKILL_PROTECTION:
+                case SKILL_PLATE_MAIL:
+                case SKILL_DEMONOLOGY:
+                case SKILL_ENHANCEMENT:
+                case SKILL_MAIL:
+                case SKILL_HOLY2:
+                case SKILL_LOCKPICKING:
+                    break;
+
+                default: continue;
+                }
+            }
+
+            // skip wrong class/race skills
+            if (!IsSpellFitByClassAndRace(tSpell->learnedSpell))
+                continue;
+
+            // skip broken spells
+            if (!SpellMgr::IsSpellValid(proto, this, false))
+                continue;
+
+            if (tSpell->learnedSpell)
+            {
+                bool learned = false;
+                for (int j = 0; j < 3; ++j)
+                {
+                    if (proto->Effect[j] == SPELL_EFFECT_LEARN_SPELL)
+                    {
+                        uint32 learnedSpell = proto->EffectTriggerSpell[j];
+                        learnSpell(learnedSpell, false);
+                        learned = true;
+                    }
+                }
+
+                if (!learned)
+                {
+                    learnSpell(tSpell->learnedSpell, false);
+                }
+            }
+            else
+            {
+                CastSpell(this, tSpell->spell, TRIGGERED_OLD_TRIGGERED);
+            }
+        }
+    }
+}
+#endif
+
 void Player::_LoadSkills(std::unique_ptr<QueryResult> queryResult)
 {
     //                                                           0      1      2
@@ -21571,6 +21811,11 @@ AreaLockStatus Player::GetAreaTriggerLockStatus(AreaTrigger const* at, uint32& m
         if (!GetGroup() || !GetGroup()->IsRaidGroup())
             return AREA_LOCKSTATUS_RAID_LOCKED;
 
+#ifdef ENABLE_PLAYERBOTS
+    if (!isRealPlayer() && GetPlayerbotAI() && GetPlayerbotAI()->CanEnterArea(at))
+        return AREA_LOCKSTATUS_OK;
+#endif
+
     // Item Requirements: must have requiredItem OR requiredItem2, report the first one that's missing
     if (at->requiredItem)
     {
@@ -21690,6 +21935,19 @@ void Player::SendLootError(ObjectGuid guid, LootError error) const
     data << uint8(0);
     data << uint8(error);
     SendDirectMessage(data);
+}
+
+void Player::SetDeathPrevention(bool enable)
+{
+    if (enable)
+        m_ExtraFlags |= PLAYER_EXTRA_GM_UNKILLABLE;
+    else
+        m_ExtraFlags &= ~PLAYER_EXTRA_GM_UNKILLABLE;
+}
+
+bool Player::IsPreventingDeath() const
+{
+    return m_ExtraFlags & PLAYER_EXTRA_GM_UNKILLABLE;
 }
 
 void Player::AddGCD(SpellEntry const& spellEntry, uint32 /*forcedDuration = 0*/, bool updateClient /*= false*/)
@@ -21933,7 +22191,7 @@ void Player::LockOutSpells(SpellSchoolMask schoolMask, uint32 duration)
 
     WorldPacket data(SMSG_SPELL_COOLDOWN, 8 + 1 + spellCount * 8);
     data << GetObjectGuid();
-    data << uint8(0x0);                                     // flags (0x1, 0x2)
+    data << uint8(SPELL_COOLDOWN_FLAG_NONE);
     data.append(cdData);
     GetSession()->SendPacket(data);
 

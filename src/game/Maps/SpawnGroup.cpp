@@ -423,6 +423,11 @@ void CreatureGroup::TriggerLinkingEvent(uint32 event, Unit* target)
             if (!target->HasCharmer() && m_objects.find(target->GetDbGuid()) != m_objects.end())
                 return;
 
+            if (m_linkageTargets.find(target) != m_linkageTargets.end()) // already triggering for target
+                return;
+
+            m_linkageTargets.insert(target);
+
             for (auto& data : m_objects)
             {
                 uint32 dbGuid = data.first;
@@ -441,6 +446,8 @@ void CreatureGroup::TriggerLinkingEvent(uint32 event, Unit* target)
                 CreatureGroup* group = static_cast<CreatureGroup*>(m_map.GetSpawnManager().GetSpawnGroup(linkedGroup));
                 group->TriggerLinkingEvent(event, target);
             }
+
+            m_linkageTargets.erase(target);
             break;
         case CREATURE_GROUP_EVENT_EVADE:
             if ((m_entry.Flags & CREATURE_GROUP_EVADE_TOGETHER) != 0)
@@ -565,6 +572,11 @@ bool CreatureGroup::IsEvading()
         }
     }
     return false;
+}
+
+bool CreatureGroup::HasGroupMember(WorldObject* wo) const
+{
+    return m_objects.find(wo->GetDbGuid()) != m_objects.end();
 }
 
 void CreatureGroup::ClearRespawnTimes()
@@ -1743,13 +1755,14 @@ bool FormationSlotData::IsFormationMaster()
 
 float FormationSlotData::GetAngle()
 {
-#ifdef ENABLE_SPAWNGROUP_FORMATION_MIRRORING
-    if (!GetFormationData()->GetMirrorState())
-        return m_angleVariation;
-    return (2 * M_PI_F) - m_angleVariation;
-#else
+    if (GetCreatureGroup()->GetGroupEntry().IsMirroring())
+    {
+        if (!GetFormationData()->GetMirrorState())
+            return m_angleVariation;
+        return (2 * M_PI_F) - m_angleVariation;
+    }
+
     return m_angleVariation;
-#endif // ENABLE_SPAWNGROUP_FORMATION_MIRRORING
 }
 
 float FormationSlotData::GetDistance() const

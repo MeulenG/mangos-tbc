@@ -22,7 +22,7 @@
 #include "Server/WorldPacket.h"
 #include "Server/WorldSession.h"
 #include "Server/Opcodes.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "World/World.h"
 #include "Globals/ObjectMgr.h"
 #include "Entities/ObjectGuid.h"
@@ -33,6 +33,12 @@
 #include "AI/ScriptDevAI/ScriptDevAIMgr.h"
 #include "Pools/PoolManager.h"
 #include "GameEvents/GameEventMgr.h"
+
+#ifdef ENABLE_PLAYERBOTS
+#include "ahbot/AhBot.h"
+#include "playerbot/playerbot.h"
+#include "playerbot/PlayerbotAIConfig.h"
+#endif
 
 #include <cstdarg>
 
@@ -291,6 +297,7 @@ ChatCommand* ChatHandler::getCommandTable()
     {
         { "chat",           SEC_ADMINISTRATOR,  false, &ChatHandler::HandleGMChatCommand,              "", nullptr },
         { "fly",            SEC_ADMINISTRATOR,  false, &ChatHandler::HandleGMFlyCommand,               "", nullptr },
+        { "unkillable",     SEC_ADMINISTRATOR,  false, &ChatHandler::HandleGMUnkillableCommand,        "", nullptr },
         { "ingame",         SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleGMListIngameCommand,        "", nullptr },
         { "list",           SEC_ADMINISTRATOR,  true,  &ChatHandler::HandleGMListFullCommand,          "", nullptr },
         { "mountup",        SEC_ADMINISTRATOR,  false, &ChatHandler::HandleGMMountUpCommand,           "", nullptr },
@@ -943,6 +950,14 @@ ChatCommand* ChatHandler::getCommandTable()
 #ifdef BUILD_AHBOT
         { "ahbot",          SEC_ADMINISTRATOR,  true,  nullptr,                                        "", ahbotCommandTable    },
 #endif
+#ifdef ENABLE_PLAYERBOTS
+#ifndef BUILD_AHBOT
+        { "ahbot",            SEC_GAMEMASTER,    true,  &ChatHandler::HandleAhBotCommand,              "", nullptr },
+#endif
+        { "rndbot",           SEC_GAMEMASTER,    true,  &ChatHandler::HandleRandomPlayerbotCommand,    "", nullptr },
+        { "bot",              SEC_PLAYER,        false, &ChatHandler::HandlePlayerbotCommand,          "", nullptr },
+        { "pmon",             SEC_GAMEMASTER,    true,  &ChatHandler::HandlePerfMonCommand,            "", nullptr },
+#endif
         { "cast",           SEC_ADMINISTRATOR,  false, nullptr,                                        "", castCommandTable     },
         { "character",      SEC_GAMEMASTER,     true,  nullptr,                                        "", characterCommandTable},
         { "channel",        SEC_MODERATOR,      false, nullptr,                                        "", channelCommandTable  },
@@ -1039,7 +1054,7 @@ ChatCommand* ChatHandler::getCommandTable()
         { "mmap",           SEC_GAMEMASTER,     false, nullptr,                                        "", mmapCommandTable },
         { "worldstate",     SEC_ADMINISTRATOR,  false, nullptr,                                        "", worldStateTable },
         { "loot",           SEC_GAMEMASTER,     true,  nullptr,                                        "", lootCommandTable },
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
         { "bot",            SEC_PLAYER,         false, &ChatHandler::HandlePlayerbotCommand,           "", nullptr },
 #endif
         { nullptr,          0,                  false, nullptr,                                        "", nullptr }

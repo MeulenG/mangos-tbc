@@ -22,7 +22,7 @@
 #include "Server/WorldSession.h"
 #include "Globals/ObjectMgr.h"
 #include "AI/ScriptDevAI/ScriptDevAIMgr.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Server/Opcodes.h"
 #include "Spells/Spell.h"
 #include "DBScripts/ScriptMgr.h"
@@ -400,7 +400,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
     // client provided targets
     SpellCastTargets targets;
 
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
     recvPacket >> targets.ReadForCaster(mover);
 #else
     recvPacket >> targets.ReadForCaster(_player);
@@ -476,6 +476,9 @@ void WorldSession::HandleCancelAuraOpcode(WorldPacket& recvPacket)
         return;
 
     if (spellInfo->HasAttribute(SPELL_ATTR_NO_AURA_CANCEL))
+        return;
+
+    if (spellInfo->HasAttribute(SPELL_ATTR_EX_NO_AURA_ICON))
         return;
 
     if (IsPassiveSpell(spellInfo))

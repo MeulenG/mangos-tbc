@@ -25,7 +25,7 @@
 #include "Server/WorldSocket.h"
 #include "WorldRunnable.h"
 #include "World/World.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Util/Timer.h"
 #include "SystemConfig.h"
 #include "CliRunnable.h"
@@ -148,6 +148,9 @@ int Master::Run()
         LoginDatabase.escape_string(builds);
         LoginDatabase.DirectPExecute("UPDATE realmlist SET realmflags = realmflags & ~(%u), population = 0, realmbuilds = '%s'  WHERE id = '%u'", REALM_FLAG_OFFLINE, builds.c_str(), realmID);
     }
+
+    sWorld.StartLFGQueueThread();
+    sWorld.StartBGQueueThread();
 
     MaNGOS::Thread* cliThread = nullptr;
 
@@ -285,6 +288,11 @@ int Master::Run()
 
     // send all still queued mass mails (before DB connections shutdown)
     sMassMailMgr.Update(true);
+
+#ifdef ENABLE_PLAYERBOTS
+    // kick and save all players
+    sWorld.KickAll(true);
+#endif
 
     ///- Wait for DB delay threads to end
     CharacterDatabase.HaltDelayThread();

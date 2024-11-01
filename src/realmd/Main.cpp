@@ -25,7 +25,7 @@
 #include "RealmList.h"
 
 #include "Config/Config.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "AuthSocket.h"
 #include "SystemConfig.h"
 #include "revision.h"
@@ -35,13 +35,13 @@
 
 #include <openssl/opensslv.h>
 #include <openssl/crypto.h>
-#if defined(OPENSSL_VERSION_MAJOR) && (OPENSSL_VERSION_MAJOR >= 3)
 #include <openssl/provider.h>
-#endif
+#include <openssl/err.h>
 
 #include <boost/program_options.hpp>
 #include <boost/version.hpp>
 #include <boost/thread.hpp>
+#include <boost/filesystem.hpp>
 
 #include <iostream>
 #include <string>
@@ -125,7 +125,7 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    if (!sConfig.SetSource(configFile))
+    if (!sConfig.SetSource(configFile, "Realmd_"))
     {
         sLog.outError("Could not find configuration file %s.", configFile.c_str());
         Log::WaitBeforeContinueIfNeed();
@@ -178,22 +178,24 @@ int main(int argc, char* argv[])
     }
 
     DETAIL_LOG("%s (Library: %s)", OPENSSL_VERSION_TEXT, OpenSSL_version(OPENSSL_VERSION));
-#if defined(OPENSSL_VERSION_MAJOR) && (OPENSSL_VERSION_MAJOR >= 3)
     // Load OpenSSL 3.0+ providers
+#ifdef _WIN32
+    // For bundled OpenSSL library
+    OSSL_PROVIDER_set_default_search_path(nullptr, boost::filesystem::current_path().string().c_str());
+#endif
     OSSL_PROVIDER* openssl_legacy = OSSL_PROVIDER_load(nullptr, "legacy");
     if (!openssl_legacy)
     {
-        sLog.outError("OpenSSL3: Failed to load Legacy provider");
+        sLog.outError("OpenSSL3: Failed to load Legacy provider: %s", ERR_error_string(ERR_get_error(), NULL));
         return 1;
     }
     OSSL_PROVIDER* openssl_default = OSSL_PROVIDER_load(nullptr, "default");
     if (!openssl_default)
     {
-        sLog.outError("OpenSSL3: Failed to load Default provider");
+        sLog.outError("OpenSSL3: Failed to load Default provider: %s", ERR_error_string(ERR_get_error(), NULL));
         OSSL_PROVIDER_unload(openssl_legacy);
         return 1;
     }
-#endif
 
     sLog.outString();
     sLog.outString("<Ctrl-C> to stop.");

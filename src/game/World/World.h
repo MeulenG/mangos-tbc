@@ -30,6 +30,8 @@
 #include "Entities/Object.h"
 #include "Multithreading/Messager.h"
 #include "Globals/GraveyardManager.h"
+#include "LFG/LFGQueue.h"
+#include "BattleGround/BattleGroundQueue.h"
 
 #include <atomic>
 #include <set>
@@ -385,7 +387,10 @@ enum eConfigBoolValues
     CONFIG_BOOL_AUTOLOAD_ACTIVE,
     CONFIG_BOOL_PATH_FIND_OPTIMIZE,
     CONFIG_BOOL_PATH_FIND_NORMALIZE_Z,
+    CONFIG_BOOL_ALWAYS_SHOW_QUEST_GREETING,
     CONFIG_BOOL_DISABLE_INSTANCE_RELOCATE,
+    CONFIG_BOOL_PRELOAD_MMAP_TILES,
+    CONFIG_BOOL_LFG_ENABLED,
     CONFIG_BOOL_VALUE_COUNT
 };
 
@@ -655,6 +660,10 @@ class World
         static uint32 GetCurrentMSTime() { return m_currentMSTime; }
         static TimePoint GetCurrentClockTime() { return m_currentTime; }
         static uint32 GetCurrentDiff() { return m_currentDiff; }
+#ifdef ENABLE_PLAYERBOTS
+        static uint32 GetAverageDiff() { return m_averageDiff; }
+        static uint32 GetMaxDiff() { return m_maxDiff; }
+#endif
 
         template<typename T>
         void ExecuteForAllSessions(T executor) const
@@ -672,6 +681,11 @@ class World
         GraveyardManager& GetGraveyardManager() { return m_graveyardManager; }
 
         void SendGMTextFlags(uint32 accountFlag, int32 stringId, std::string type, const char* message);
+
+        LFGQueue& GetLFGQueue() { return m_lfgQueue; }
+        BattleGroundQueue& GetBGQueue() { return m_bgQueue; }
+        void StartLFGQueueThread();
+        void StartBGQueueThread();
     protected:
         void _UpdateGameTime();
         // callback for UpdateRealmCharacters
@@ -781,6 +795,13 @@ class World
         static uint32 m_currentMSTime;
         static TimePoint m_currentTime;
         static uint32 m_currentDiff;
+#ifdef ENABLE_PLAYERBOTS
+        static uint32 m_currentDiffSum;
+        static uint32 m_currentDiffSumIndex;
+        static uint32 m_averageDiff;
+        static uint32 m_maxDiff;
+        static std::list<uint32> m_histDiff;
+#endif
 
         Messager<World> m_messager;
 
@@ -792,6 +813,12 @@ class World
         std::array<std::atomic<uint32>, MAX_CLASSES> m_onlineClasses;
 
         GraveyardManager m_graveyardManager;
+
+        // Housing this here but logically it is completely asynchronous
+        LFGQueue m_lfgQueue;
+        std::thread m_lfgQueueThread;
+        BattleGroundQueue m_bgQueue;
+        std::thread m_bgQueueThread;
 };
 
 extern uint32 realmID;

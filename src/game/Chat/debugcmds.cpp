@@ -22,7 +22,7 @@
 #include "Entities/Player.h"
 #include "Server/Opcodes.h"
 #include "Chat/Chat.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Entities/Unit.h"
 #include "Entities/GossipDef.h"
 #include "Tools/Language.h"
@@ -389,7 +389,7 @@ bool ChatHandler::HandleDebugSendQuestPartyMsgCommand(char* args)
     if (!ExtractUInt32(&args, msg))
         return false;
 
-    m_session->GetPlayer()->SendPushToPartyResponse(m_session->GetPlayer(), msg);
+    m_session->GetPlayer()->SendPushToPartyResponse(m_session->GetPlayer(), static_cast<QuestShareMessages>(msg));
     return true;
 }
 

@@ -16,7 +16,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include "Log.h"
+#include "Log/Log.h"
 #include "Grids/CellImpl.h"
 #include "GridDefines.h"
 #include "Maps/Map.h"
@@ -1295,7 +1295,7 @@ GridMap* TerrainInfo::LoadMapAndVMap(const uint32 x, const uint32 y, bool mapOnl
     if (!MMAP::MMapFactory::createOrGetMMapManager()->IsMMapIsLoaded(m_mapId, x, y))
     {
         // load navmesh
-        MMAP::MMapFactory::createOrGetMMapManager()->loadMap(m_mapId, x, y);
+        MMAP::MMapFactory::createOrGetMMapManager()->loadMap(sWorld.GetDataPath(), m_mapId, x, y);
     }
 
     if (m_GridMaps[x][y])

@@ -17,7 +17,7 @@
  */
 
 #include "Entities/Unit.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Server/Opcodes.h"
 #include "Server/WorldPacket.h"
 #include "Server/WorldSession.h"
@@ -384,6 +384,10 @@ Unit::Unit() :
     // implement 50% base damage from offhand
     m_auraModifiersGroup[UNIT_MOD_DAMAGE_OFFHAND][TOTAL_PCT] = 0.5f;
 
+    for (auto& i : m_attackPowerMod)
+        for (auto& k : i)
+            k = 0;
+
     for (float& m_createStat : m_createStats)
         m_createStat = 0.0f;
 
@@ -613,8 +617,18 @@ void Unit::TriggerHomeEvents()
             GetMap()->GetCreatureLinkingHolder()->TryFollowMaster((Creature*)this);
     }
 
-    if (IsCreature() && static_cast<Creature*>(this)->GetCreatureGroup())
-        static_cast<Creature*>(this)->GetCreatureGroup()->TriggerLinkingEvent(CREATURE_GROUP_EVENT_HOME, this);
+    if (IsCreature())
+    {
+        Creature* me = static_cast<Creature*>(this);
+        if (me->GetCreatureGroup())
+            me->GetCreatureGroup()->TriggerLinkingEvent(CREATURE_GROUP_EVENT_HOME, this);
+        if (me->IsPet())
+        {
+            Unit* owner = me->GetOwner();
+            if (!owner->IsAlive() && static_cast<Pet*>(this)->IsGuardian())
+                static_cast<Pet*>(this)->Unsummon(PET_SAVE_REAGENTS);
+        }
+    }
 }
 
 void Unit::EvadeTimerExpired()
@@ -660,7 +674,7 @@ bool Unit::UpdateMeleeAttackingState()
         swingError = SWING_ERROR_BAD_FACING;
     else if (!victim->IsAlive())
         swingError = SWING_ERROR_TARGET_NOT_ALIVE;
-    else if (!CanAttackInCombat(victim))
+    else if (!CanAttackInCombat(victim, false, false))
         swingError = SWING_ERROR_CANT_ATTACK_TARGET;
     else
     {
@@ -1011,12 +1025,12 @@ uint32 Unit::DealDamage(Unit* dealer, Unit* victim, uint32 damage, CleanDamage c
             duel_hasEnded = true;
         }
 
-        if (dealer->GetTypeId() == TYPEID_PLAYER && dealer != victim)
+        if (dealer->IsPlayer() && dealer != victim)
         {
             Player* killer = static_cast<Player*>(dealer);
 
             // in bg, count dmg if victim is also a player
-            if (victim->GetTypeId() == TYPEID_PLAYER)
+            if (victim->IsPlayer())
             {
                 if (BattleGround* bg = killer->GetBattleGround())
                 {
@@ -2735,7 +2749,7 @@ void Unit::AttackerStateUpdate(Unit* pVictim, WeaponAttackType attType, bool ext
 
     SendAttackStateUpdate(&meleeDamageInfo);
     DealMeleeDamage(&meleeDamageInfo, true);
-    ProcDamageAndSpell(ProcSystemArguments(this, meleeDamageInfo.target, meleeDamageInfo.procAttacker, meleeDamageInfo.procVictim, meleeDamageInfo.procEx, meleeDamageInfo.totalDamage, meleeDamageInfo.attackType));
+    ProcDamageAndSpell(ProcSystemArguments(this, meleeDamageInfo.target, meleeDamageInfo.procAttacker, meleeDamageInfo.procVictim, meleeDamageInfo.procEx, meleeDamageInfo.totalDamage, meleeDamageInfo.absorb, meleeDamageInfo.attackType));
 
     uint32 totalAbsorb = 0;
     uint32 totalResist = 0;
@@ -2988,7 +3002,8 @@ SpellMissInfo Unit::SpellHitResult(WorldObject* caster, Unit* pVictim, SpellEntr
 
     // All positive spells can`t miss
     // TODO: client not show miss log for this spells - so need find info for this in dbc and use it!
-    if (IsPositiveEffectMask(spellInfo, effectMask, caster, pVictim))
+    bool ignoreRestrictions = spellInfo->HasAttribute(SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS) || spellInfo->HasAttribute(SPELL_ATTR_EX5_IGNORE_TARGET_REQUIREMENTS);
+    if (!ignoreRestrictions && IsPositiveEffectMask(spellInfo, effectMask, caster, pVictim))
     {
         if (pVictim->IsImmuneToSpell(spellInfo, reflected ? false : (caster == pVictim), effectMask, caster))
             return SPELL_MISS_IMMUNE;
@@ -7191,10 +7206,10 @@ int32 Unit::DealHeal(Unit* pVictim, uint32 addhealth, SpellEntry const* spellPro
 
     unit->SendHealSpellLog(pVictim, spellProto->Id, addhealth, critical);
 
-    if (unit->GetTypeId() == TYPEID_PLAYER)
+    if (unit->IsPlayer())
     {
-        if (BattleGround* bg = ((Player*)unit)->GetBattleGround())
-            bg->UpdatePlayerScore((Player*)unit, SCORE_HEALING_DONE, gain);
+        if (BattleGround* bg = static_cast<Player*>(unit)->GetBattleGround())
+            bg->UpdatePlayerScore(static_cast<Player*>(unit), SCORE_HEALING_DONE, gain);
     }
 
     // Script Event HealedBy
@@ -7312,11 +7327,9 @@ void Unit::EnergizeBySpell(Unit* victim, SpellEntry const* spellInfo, uint32 dam
  */
 int32 Unit::SpellBonusWithCoeffs(SpellEntry const* spellInfo, SpellEffectIndex effectIndex, int32 total, int32 benefit, int32 ap_benefit,  DamageEffectType damagetype, bool donePart)
 {
-    // Distribute Damage over multiple effects, reduce by AoE
-    float coeff = 1.0f;
-
-    // Not apply this to creature casted spells
-    if (GetTypeId() == TYPEID_UNIT && !((Creature*)this)->IsPet())
+    float coeff = 0.f; // no coefficient by default
+    // does not apply to creatures
+    if (IsCreature() && !IsPlayerControlled())
         coeff = 1.0f;
     // Check for table values
     if (spellInfo->effectBonusCoefficient[effectIndex] > 0 || spellInfo->effectBonusCoefficientFromAP[effectIndex] > 0)
@@ -7329,9 +7342,6 @@ int32 Unit::SpellBonusWithCoeffs(SpellEntry const* spellInfo, SpellEffectIndex e
             total += int32(ap_bonus * (GetTotalAttackPowerValue(IsSpellRequiresRangedAP(spellInfo) ? RANGED_ATTACK : BASE_ATTACK) + ap_benefit));
         }
     }
-    // Default calculation
-    else if (benefit)
-        coeff = CalculateDefaultCoefficient(spellInfo, damagetype);
 
     if (benefit)
     {
@@ -9362,6 +9372,15 @@ bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, f
         case BASE_VALUE:
         case TOTAL_VALUE:
             m_auraModifiersGroup[unitMod][modifierType] += apply ? amount : -amount;
+
+            if (modifierType == TOTAL_VALUE)
+            {
+                auto sign = amount > 0 ? AttackPowerModSign::MOD_SIGN_POS : AttackPowerModSign::MOD_SIGN_NEG;
+                if (unitMod == UNIT_MOD_ATTACK_POWER)
+                    m_attackPowerMod[size_t(AttackPowerMod::MELEE_ATTACK_POWER)][size_t(sign)] += apply ? amount : -amount;
+                else if (unitMod == UNIT_MOD_ATTACK_POWER_RANGED)
+                    m_attackPowerMod[size_t(AttackPowerMod::RANGED_ATTACK_POWER)][size_t(sign)] += apply ? amount : -amount;
+            }
             break;
         case BASE_PCT:
         case TOTAL_PCT:
@@ -9552,7 +9571,7 @@ float Unit::GetTotalAttackPowerValue(WeaponAttackType attType) const
             return 0.0f;
         return ap * (1.0f + GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
     }
-    int32 ap = GetInt32Value(UNIT_FIELD_ATTACK_POWER) + GetInt32Value(UNIT_FIELD_ATTACK_POWER_MODS);
+    int32 ap = GetInt32Value(UNIT_FIELD_ATTACK_POWER) + GetUInt16Value(UNIT_FIELD_ATTACK_POWER_MODS, 0) - GetUInt16Value(UNIT_FIELD_ATTACK_POWER_MODS, 1);
     if (ap < 0)
         return 0.0f;
     return ap * (1.0f + GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
@@ -11617,19 +11636,13 @@ Unit* Unit::TakePossessOf(SpellEntry const* spellEntry, SummonPropertiesEntry co
     if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED))
         possessed->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
 
-    const bool immunePC = IsImmuneToPlayer();
-    if (possessed->IsImmuneToPlayer() != immunePC)
-        possessed->SetImmuneToPlayer(immunePC);
-
-    const bool immuneNPC = IsImmuneToNPC();
-    if (possessed->IsImmuneToNPC() != immuneNPC)
-        possessed->SetImmuneToNPC(immuneNPC);
-
     charmInfo->ProcessUnattackableTargets(possessed->m_combatData);
 
     if (player)
     {
         // Initialize pet bar
+        if (uint32 charmedSpellList = possessed->GetCreatureInfo()->CharmedSpellList)
+            possessed->SetSpellList(charmedSpellList);
         charmInfo->InitPossessCreateSpells();
         player->PossessSpellInitialize();
 
@@ -11697,6 +11710,9 @@ bool Unit::TakePossessOf(Unit* possessed)
         charmInfo->SetCharmState("PossessedAI");
         possessedCreature->SetWalk(IsWalking(), true);
         getHostileRefManager().deleteReference(possessedCreature);
+
+        if (uint32 charmedSpellList = possessedCreature->GetCreatureInfo()->CharmedSpellList)
+            possessedCreature->SetSpellList(charmedSpellList);
     }
     else if (possessed->GetTypeId() == TYPEID_PLAYER)
     {
@@ -11802,7 +11818,7 @@ bool Unit::TakeCharmOf(Unit* charmed, uint32 spellId, bool advertised /*= true*/
 
     Position combatStartPosition;
 
-    if (charmed->GetTypeId() == TYPEID_PLAYER)
+    if (charmed->IsPlayer())
     {
         Player* charmedPlayer = static_cast<Player*>(charmed);
         if (charmerPlayer && charmerPlayer->IsInDuelWith(charmedPlayer))
@@ -11826,7 +11842,7 @@ bool Unit::TakeCharmOf(Unit* charmed, uint32 spellId, bool advertised /*= true*/
 
         charmedPlayer->SendForcedObjectUpdate();
     }
-    else if (charmed->GetTypeId() == TYPEID_UNIT)
+    else if (charmed->IsCreature())
     {
         Creature* charmedCreature = static_cast<Creature*>(charmed);
 
@@ -11842,6 +11858,9 @@ bool Unit::TakeCharmOf(Unit* charmed, uint32 spellId, bool advertised /*= true*/
         getHostileRefManager().deleteReference(charmedCreature);
 
         charmedCreature->SetFactionTemporary(GetFaction(), TEMPFACTION_NONE);
+
+        if (uint32 charmedSpellList = charmedCreature->GetCreatureInfo()->CharmedSpellList)
+            charmedCreature->SetSpellList(charmedSpellList);
 
         if (isPossessCharm)
             charmInfo->InitPossessCreateSpells();
@@ -12025,7 +12044,7 @@ void Unit::Uncharm(Unit* charmed, uint32 spellId)
     // TODO: maybe should be done on HomeMovementGenerator::MovementExpires
     charmed->GetCombatManager().SetEvadeState(EVADE_NONE);
 
-    if (charmed->GetTypeId() == TYPEID_UNIT)
+    if (charmed->IsCreature())
     {
         // now we have to clean threat list to be able to restore normal creature behavior
         Creature* charmedCreature = static_cast<Creature*>(charmed);
@@ -12057,9 +12076,12 @@ void Unit::Uncharm(Unit* charmed, uint32 spellId)
             charmed->DeleteCharmInfo();
         }
 
+        if (charmedCreature->GetCreatureInfo()->CharmedSpellList)
+            charmedCreature->SetSpellList(charmedCreature->GetCreatureInfo()->SpellList);
+
         charmed->SetTarget(charmed->GetVictim());
     }
-    else if (charmed->GetTypeId() == TYPEID_PLAYER)
+    else if (charmed->IsPlayer())
     {
         charmed->AttackStop(true, true);
 
@@ -12833,6 +12855,14 @@ void Unit::SelectAttackingTargets(std::vector<Unit*>& selectedTargets, Attacking
             sLog.outError("Creature::SelectAttackingTarget> Target have unimplemented value!");
             break;
     }
+}
+
+Unit::MmapForcingStatus Unit::IsIgnoringMMAP() const
+{
+    if (IsPlayer() || IsPlayerControlled())
+        return MmapForcingStatus::FORCED;
+
+    return MmapForcingStatus::DEFAULT;
 }
 
 void Unit::SetLevitate(bool enable)

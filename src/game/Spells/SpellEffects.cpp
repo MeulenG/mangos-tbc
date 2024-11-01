@@ -20,7 +20,7 @@
 #include "Database/DatabaseEnv.h"
 #include "Server/WorldPacket.h"
 #include "Server/Opcodes.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "World/World.h"
 #include "Globals/ObjectMgr.h"
 #include "AI/ScriptDevAI/ScriptDevAIMgr.h"
@@ -2461,8 +2461,8 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
                     if (m_caster->GetTypeId() != TYPEID_PLAYER)
                         return;
 
-                    if (BattleGround* bg = ((Player*)m_caster)->GetBattleGround())
-                        bg->HandlePlayerDroppedFlag((Player*)m_caster);
+                    if (BattleGround* bg = static_cast<Player*>(m_caster)->GetBattleGround())
+                        bg->HandlePlayerDroppedFlag(static_cast<Player*>(m_caster));
 
                     m_caster->CastSpell(m_caster, 30452, TRIGGERED_OLD_TRIGGERED, nullptr);
                     return;
@@ -6221,25 +6221,6 @@ void Spell::EffectScriptEffect(SpellEffectIndex eff_idx)
                         unitTarget->CastSpell(nullptr, 26529, TRIGGERED_NONE);
                     return;
                 }
-                case 26656:                                 // Summon Black Qiraji Battle Tank
-                {
-                    if (!unitTarget)
-                        return;
-
-                    if (unitTarget->HasAura(25863) || unitTarget->HasAura(26655))
-                        return; // protection against visual glitch
-
-                    // Prevent stacking of mounts
-                    unitTarget->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
-
-                    // Two separate mounts depending on area id (allows use both in and out of specific instance)
-                    if (unitTarget->GetAreaId() == 3428)
-                        unitTarget->CastSpell(unitTarget, 25863, TRIGGERED_NONE);
-                    else
-                        unitTarget->CastSpell(unitTarget, 26655, TRIGGERED_NONE);
-
-                    return;
-                }
                 case 26663:                                 // Valentine - Orgrimmar Grunt
                 case 26923:                                 // Valentine - Thunderbluff Watcher
                 case 26924:                                 // Valentine - Undercity Guardian
@@ -8536,6 +8517,9 @@ void Spell::EffectSpiritHeal(SpellEffectIndex /*eff_idx*/)
 
     if (Player* player = static_cast<Player*>(unitTarget))
     {
+#ifdef ENABLE_PLAYERBOTS
+        player->RemoveAurasDueToSpell(2584);
+#endif
         player->ResurrectPlayer(1.0f);
         player->SpawnCorpseBones();
 

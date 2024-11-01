@@ -31,6 +31,8 @@
 #include "Entities/Item.h"
 #include "WorldSocket.h"
 #include "Multithreading/Messager.h"
+#include "LFG/LFGDefines.h"
+#include "BattleGround/BattleGroundDefines.h"
 
 #include <atomic>
 #include <map>
@@ -121,16 +123,6 @@ enum PartyResult
     ERR_IGNORING_YOU_S                  = 9,
     ERR_LFG_PENDING                     = 12,
     ERR_INVITE_RESTRICTED               = 13,
-};
-
-enum LfgType : uint32
-{
-    LFG_TYPE_NONE           = 0,
-    LFG_TYPE_DUNGEON        = 1,
-    LFG_TYPE_RAID           = 2,
-    LFG_TYPE_QUEST          = 3,
-    LFG_TYPE_ZONE           = 4,
-    LFG_TYPE_HEROIC_DUNGEON = 5
 };
 
 enum ChatRestrictionType
@@ -269,7 +261,7 @@ class WorldSession
         char const* GetPlayerName() const;
         std::string GetChatType(uint32 type);
         void SetSecurity(AccountTypes security) { _security = security; }
-#ifdef BUILD_PLAYERBOT
+#if defined(BUILD_DEPRECATED_PLAYERBOT) || defined(ENABLE_PLAYERBOTS)
         // Players connected without socket are bot
         const std::string GetRemoteAddress() const { return m_socket ? m_socket->GetRemoteAddress() : "disconnected/bot"; }
 #else
@@ -285,7 +277,7 @@ class WorldSession
         void AssignAnticheat(std::unique_ptr<SessionAnticheatInterface>&& anticheat);
         SessionAnticheatInterface* GetAnticheat() const { return m_anticheat.get(); }
 
-#ifdef BUILD_PLAYERBOT
+#if defined(BUILD_DEPRECATED_PLAYERBOT) || defined(ENABLE_PLAYERBOTS)
         void SetNoAnticheat();
 #endif
 
@@ -421,12 +413,8 @@ class WorldSession
 
         // Looking For Group
         // TRUE values set by client sending CMSG_LFG_SET_AUTOJOIN and CMSG_LFM_CLEAR_AUTOFILL before player login
-        bool LookingForGroup_auto_join = false;
-        bool LookingForGroup_auto_add = false;
-        bool LookingForGroup_queue = false;
         void SendMeetingStoneInProgress();
         void SendMeetingStoneComplete();
-        void SendLFGListQueryResponse(LfgType type, uint32 entry);
         void SendLFGUpdate();
         void SendLFGUpdateLFG();
         void SendLFGUpdateLFM();
@@ -472,6 +460,10 @@ class WorldSession
         // Misc
         void SendKnockBack(Unit* who, float angle, float horizontalSpeed, float verticalSpeed);
         void SendPlaySpellVisual(ObjectGuid guid, uint32 spellArtKit) const;
+
+#ifdef ENABLE_PLAYERBOTS
+        void SendTeleportToObservers(float x, float y, float z, float orientation);
+#endif
 
         void SendAuthOk() const;
         void SendAuthQueued() const;
@@ -836,6 +828,9 @@ class WorldSession
         void HandleRandomRollOpcode(WorldPacket& recv_data);
         void HandleFarSightOpcode(WorldPacket& recv_data);
         void HandleSetDungeonDifficultyOpcode(WorldPacket& recv_data);
+        void HandleLfgAcceptLfgMatch(WorldPacket& recv_data);
+        void HandleLfgDeclineLfgMatch(WorldPacket& recv_data);
+        void HandleLfgCancelPendingLfg(WorldPacket& recv_data);
         void HandleLfgSetAutoJoinOpcode(WorldPacket& recv_data);
         void HandleLfgClearAutoJoinOpcode(WorldPacket& recv_data);
         void HandleLfmSetAutoFillOpcode(WorldPacket& recv_data);
@@ -913,9 +908,15 @@ class WorldSession
         std::deque<uint32> GetOutOpcodeHistory();
         std::deque<uint32> GetIncOpcodeHistory();
 
+#ifdef ENABLE_PLAYERBOTS
+        void HandleBotPackets();
+#endif
+
         Messager<WorldSession>& GetMessager() { return m_messager; }
 
         void SetPacketLogging(bool state);
+
+        LfgPlayerInfo m_lfgInfo;
 
     private:
         // Additional private opcode handlers

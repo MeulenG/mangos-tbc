@@ -14,7 +14,7 @@
 #include "Server/WorldPacket.h"
 #include "Server/WorldSession.h"
 #include "World/World.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "Server/Opcodes.h"
 #include "Util/ByteBuffer.h"
 #include "Database/DatabaseEnv.h"
@@ -417,6 +417,14 @@ void Warden::HandlePacket(WorldPacket& recvData)
                 uint16 length;
                 uint32 checksum;
                 recvData >> length >> checksum;
+
+                if (length > (recvData.size() - recvData.rpos()))
+                {
+                    recvData.rpos(recvData.wpos());
+                    _anticheat->RecordCheatInternal(CheatType::CHEAT_TYPE_WARDEN, "Packet checksum length fail");
+                    _session->KickPlayer();
+                    return;
+                }
 
                 if (BuildChecksum(recvData.contents() + recvData.rpos(), length) != checksum)
                 {

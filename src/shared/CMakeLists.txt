@@ -76,8 +76,8 @@ set(SRC_GRP_DATABASE_DBC
 )
 
 set(SRC_GRP_LOG
-    Log.cpp
-    Log.h
+    Log/Log.cpp
+    Log/Log.h
 )
 
 set(SRC_GRP_MT
@@ -259,6 +259,11 @@ endif()
 # Specific definition for an issue with boost/stacktrace when building on macOS
 if(APPLE OR "${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
   add_compile_definitions(_GNU_SOURCE)
+endif()
+
+# Define ENABLE_PLAYERBOTS if need
+if (BUILD_PLAYERBOTS)
+  add_definitions(-DENABLE_PLAYERBOTS)
 endif()
 
 # Generate precompiled header

@@ -32,7 +32,8 @@
 #include "Maps/MapManager.h"
 #include "Maps/MapPersistentStateMgr.h"
 #include "Spells/SpellAuras.h"
-#ifdef BUILD_PLAYERBOT
+#include "BattleGround/BattleGroundMgr.h"
+#ifdef BUILD_DEPRECATED_PLAYERBOT
 #include "PlayerBot/Base/PlayerbotMgr.h"
 #endif
 
@@ -379,7 +380,7 @@ bool Group::AddMember(ObjectGuid guid, const char* name)
 uint32 Group::RemoveMember(ObjectGuid guid, uint8 method)
 {
     Player* player = sObjectMgr.GetPlayer(guid);
-#ifdef BUILD_PLAYERBOT
+#ifdef BUILD_DEPRECATED_PLAYERBOT
     // if master leaves group, all bots leave group
     if (player && player->GetPlayerbotMgr())
         player->GetPlayerbotMgr()->RemoveAllBotsFromGroup();
@@ -440,6 +441,12 @@ uint32 Group::RemoveMember(ObjectGuid guid, uint8 method)
             data << m_leaderName;
             BroadcastPacket(data, true);
         }
+
+        // TODO: Check if member leaving should just update queue
+        sWorld.GetLFGQueue().GetMessager().AddMessage([guid](LFGQueue* queue)
+        {
+            queue->StopLookingForGroup(guid, guid);
+        });
 
         SendUpdate();
     }
@@ -1226,7 +1233,7 @@ uint32 Group::CanJoinBattleGroundQueue(BattleGroundTypeId bgTypeId, BattleGround
     if (!reference)
         return BG_JOIN_ERR_OFFLINE_MEMBER;
 
-    BattleGroundBracketId bracket_id = reference->GetBattleGroundBracketIdFromLevel(bgTypeId);
+    BattleGroundBracketId bracket_id = sBattleGroundMgr.GetBattleGroundBracketIdFromLevel(bgTypeId, reference->GetLevel());
     uint32 arenaTeamId = reference->GetArenaTeamId(arenaSlot);
     Team team = reference->GetTeam();
 
@@ -1241,7 +1248,7 @@ uint32 Group::CanJoinBattleGroundQueue(BattleGroundTypeId bgTypeId, BattleGround
         if (member->GetTeam() != team)
             return BG_JOIN_ERR_MIXED_FACTION;
         // not in the same battleground level bracket, don't let join
-        if (member->GetBattleGroundBracketIdFromLevel(bgTypeId) != bracket_id)
+        if (sBattleGroundMgr.GetBattleGroundBracketIdFromLevel(bgTypeId, member->GetLevel()) != bracket_id)
             return BG_JOIN_ERR_MIXED_LEVELS;
         // don't let join rated matches if the arena team id doesn't match
         if (isRated && member->GetArenaTeamId(arenaSlot) != arenaTeamId)

@@ -23,7 +23,7 @@
 #include "Server/WorldPacket.h"
 #include "Server/WorldSession.h"
 #include "Server/Opcodes.h"
-#include "Log.h"
+#include "Log/Log.h"
 #include "World/World.h"
 #include "Globals/ObjectMgr.h"
 #include "Entities/ObjectGuid.h"
@@ -202,7 +202,7 @@ void WorldSession::HandleCreatureQueryOpcode(WorldPacket& recv_data)
         data << uint32(0);                                  // unknown        wdbFeild11
         data << uint32(ci->PetSpellDataId);                 // Id from CreatureSpellData.dbc    wdbField12
 
-        for (uint32 i : ci->ModelId)
+        for (uint32 i : ci->DisplayId)
             data << i;
 
         data << float(ci->HealthMultiplier);                 // health multiplier
